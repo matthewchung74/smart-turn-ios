@@ -4,6 +4,8 @@ Real-time turn detection for conversational AI using audio analysis. Detects whe
 
 ![SmartTurn Demo](images/IMG_0007.PNG)
 
+> **Note**: This iOS implementation is based on the [SmartTurn project](https://github.com/pipecat-ai/smart-turn) by Pipecat AI. The ONNX model (`smart-turn-v3.0.onnx`) and core turn detection approach originated from their work.
+
 ## Overview
 
 SmartTurn is an iOS application that uses machine learning to detect conversation turn completion in real-time. It analyzes audio input using a Whisper-based feature extractor and an ONNX Runtime model to determine when a speaker has finished speaking.
@@ -217,6 +219,7 @@ MIT License - See LICENSE file for details
 
 ## Acknowledgments
 
+- **[Pipecat AI](https://github.com/pipecat-ai/smart-turn)** - Original SmartTurn project, ONNX model, and turn detection methodology
 - ONNX Runtime team for mobile inference support
 - OpenAI Whisper for audio feature extraction approach
 - SwiftUI for modern iOS UI framework
