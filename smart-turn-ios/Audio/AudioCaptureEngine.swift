@@ -156,6 +156,13 @@ final class AudioCaptureEngine: ObservableObject {
         bufferLock.lock()
         audioBuffer.removeAll()
         bufferLock.unlock()
+
+        // Deactivate audio session
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            print("⚠️ Failed to deactivate audio session: \(error)")
+        }
     }
 
     /// Get current audio buffer (last 8 seconds)

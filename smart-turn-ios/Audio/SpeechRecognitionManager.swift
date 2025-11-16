@@ -190,12 +190,8 @@ final class SpeechRecognitionManager: ObservableObject, AudioBufferConsumer {
         isRecognizing = false
         statusMessage = isAuthorized ? "Speech recognition ready" : "Speech recognition disabled"
 
-        // Deactivate audio session if no other consumers are active
-        do {
-            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        } catch {
-            print("⚠️ Failed to deactivate audio session: \(error)")
-        }
+        // Note: Audio session is managed by AudioCaptureEngine, not here
+        // Deactivating would kill the shared audio engine
 
         print("✅ Speech recognition stopped")
     }
