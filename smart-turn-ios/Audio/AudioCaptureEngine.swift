@@ -171,12 +171,17 @@ final class AudioCaptureEngine: ObservableObject {
         // Stop engine first
         if audioEngine.isRunning {
             audioEngine.stop()
+            print("✅ Audio engine stopped")
         }
 
-        // Remove tap if it exists
-        if inputNode.numberOfInputs > 0 {
-            inputNode.removeTap(onBus: 0)
-        }
+        // ALWAYS remove tap (even if we think there isn't one)
+        // This prevents format mismatch crashes on restart
+        inputNode.removeTap(onBus: 0)
+        print("✅ Audio tap removed")
+
+        // Reset audio engine to clear internal state
+        audioEngine.reset()
+        print("✅ Audio engine reset")
 
         isRecording = false
 
@@ -257,22 +262,19 @@ final class AudioCaptureEngine: ObservableObject {
     }
 
     private func setupAudioTap() throws {
+        // Remove any existing tap first to prevent format mismatch crashes
+        // This is safe even if no tap exists
+        inputNode.removeTap(onBus: 0)
+        print("🔧 Removed any existing audio tap")
+
         // Get input format (usually 48kHz on modern devices)
-        var inputFormat = inputNode.outputFormat(forBus: 0)
+        let inputFormat = inputNode.outputFormat(forBus: 0)
+        print("🔧 Input format: \(inputFormat.sampleRate) Hz, \(inputFormat.channelCount) channels")
 
         // Check if format is valid (simulator often returns 0 Hz)
-        if inputFormat.sampleRate == 0 {
-            // Use a default format (48kHz stereo - typical hardware format)
-            guard let defaultFormat = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: 48000,
-                channels: 2,
-                interleaved: false
-            ) else {
-                throw AudioCaptureError.invalidAudioFormat
-            }
-            inputFormat = defaultFormat
-            print("⚠️ Input format invalid (0 Hz), using default 48kHz stereo format")
+        guard inputFormat.sampleRate > 0 else {
+            print("❌ Input format invalid (0 Hz sample rate)")
+            throw AudioCaptureError.invalidAudioFormat
         }
 
         // Create target format (16kHz mono)
@@ -284,21 +286,25 @@ final class AudioCaptureEngine: ObservableObject {
         ) else {
             throw AudioCaptureError.invalidAudioFormat
         }
+        print("🔧 Target format: \(targetFormat.sampleRate) Hz, \(targetFormat.channelCount) channels")
 
         // Create converter
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
+            print("❌ Failed to create audio converter")
             throw AudioCaptureError.invalidAudioFormat
         }
         self.converter = converter
+        print("✅ Audio converter created")
 
-        // Install tap
+        // Install tap with the ACTUAL input format (not a hardcoded one)
         inputNode.installTap(
             onBus: 0,
             bufferSize: Self.processingBufferSize,
-            format: inputFormat
+            format: inputFormat  // Use the actual hardware format
         ) { [weak self] buffer, _ in
             self?.processCapturedAudio(buffer: buffer)
         }
+        print("✅ Audio tap installed")
     }
 
     private func startEngine() throws {
