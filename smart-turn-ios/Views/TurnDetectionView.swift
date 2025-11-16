@@ -420,7 +420,10 @@ struct TurnDetectionView: View {
 
             // Start/Stop Recording Button
             Button {
+                let timestamp = Date().timeIntervalSince1970
+                print("👆 [TAP] Button tapped at \(timestamp), state: \(recordingState.description), disabled: \(recordingState == .starting || recordingState == .stopping)")
                 handleRecordingToggle()
+                print("👆 [TAP] handleRecordingToggle() returned")
             } label: {
                 if recordingState == .starting || recordingState == .stopping {
                     HStack {
