@@ -184,9 +184,10 @@ final class AudioCaptureEngine: ObservableObject {
         audioEngine.inputNode.removeTap(onBus: 0)
         print("✅ Audio tap removed")
 
-        // Reset audio engine to clear internal state
-        audioEngine.reset()
-        print("✅ Audio engine reset")
+        // NOTE: We do NOT call audioEngine.reset() here because:
+        // - audioEngine.stop() already deallocates the engine
+        // - reset() can leave the engine in an invalid state where tap callbacks don't fire
+        // - On next start, we get a fresh engine automatically
 
         isRecording = false
 

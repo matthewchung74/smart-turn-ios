@@ -115,6 +115,9 @@ struct TurnDetectionView: View {
     @State private var recordingState: RecordingState = .idle
     @State private var stateVersion: Int = 0  // Incremented on each state change
 
+    // Timing measurement for loading indicator
+    @State private var startingTimestamp: Date?
+
     // State transition method (validates before mutation)
     private func transitionTo(_ newState: RecordingState) {
         guard recordingState.canTransition(to: newState) else {
@@ -127,6 +130,16 @@ struct TurnDetectionView: View {
         stateVersion += 1  // Increment version to invalidate old async callbacks
         print("🔄 State transition: \(oldState.description) → \(newState.description) (v\(stateVersion))")
         addLog("State: \(newState.description)", level: .info)
+
+        // Track loading indicator timing
+        if newState == .starting {
+            startingTimestamp = Date()
+            print("⏱️ [TIMING] Loading indicator START")
+        } else if newState == .recording, let startTime = startingTimestamp {
+            let duration = Date().timeIntervalSince(startTime) * 1000  // Convert to ms
+            print("⏱️ [TIMING] Loading indicator END - Duration: \(String(format: "%.0f", duration))ms")
+            startingTimestamp = nil
+        }
     }
 
     @State private var showPermissionAlert = false
