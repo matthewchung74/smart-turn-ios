@@ -575,13 +575,21 @@ struct TurnDetectionView: View {
     private func startSilenceMonitoring() {
         // Monitor audio levels every 0.1 seconds to detect silence
         silenceMonitorTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            monitorForSilence()
+            Task { @MainActor in
+                self.monitorForSilence()
+            }
+        }
+        // Ensure timer runs on main RunLoop
+        if let timer = silenceMonitorTimer {
+            RunLoop.main.add(timer, forMode: .common)
         }
     }
 
     private func stopSilenceMonitoring() {
         silenceMonitorTimer?.invalidate()
         silenceMonitorTimer = nil
+        resultDisplayTimer?.invalidate()
+        resultDisplayTimer = nil
         silenceStartTime = nil
         hasDetectedThisSilence = false
         detector.clearResult()
