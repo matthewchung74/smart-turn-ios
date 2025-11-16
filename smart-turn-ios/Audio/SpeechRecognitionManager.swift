@@ -12,8 +12,9 @@ import AVFoundation
 import Combine
 
 /// Manages Apple Speech framework for real-time transcription
+/// Uses shared AudioCaptureEngine to avoid dual audio engine conflict
 @MainActor
-final class SpeechRecognitionManager: ObservableObject {
+final class SpeechRecognitionManager: ObservableObject, AudioBufferConsumer {
 
     // MARK: - Published Properties
 
@@ -37,11 +38,13 @@ final class SpeechRecognitionManager: ObservableObject {
     private let speechRecognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private let audioEngine = AVAudioEngine()
+    private weak var audioEngine: AudioCaptureEngine?
 
     // MARK: - Initialization
 
-    init() {
+    init(audioEngine: AudioCaptureEngine) {
+        self.audioEngine = audioEngine
+
         // Initialize speech recognizer (uses device locale)
         speechRecognizer = SFSpeechRecognizer()
 
@@ -52,7 +55,18 @@ final class SpeechRecognitionManager: ObservableObject {
             return
         }
 
-        print("✅ SpeechRecognitionManager initialized")
+        print("✅ SpeechRecognitionManager initialized with shared audio engine")
+    }
+
+    // MARK: - AudioBufferConsumer
+
+    /// Receives audio buffers from shared AudioCaptureEngine (called on background thread)
+    nonisolated func didReceiveAudioBuffer(_ buffer: AVAudioPCMBuffer) {
+        // Forward buffer to speech recognition request
+        // Note: SFSpeechAudioBufferRecognitionRequest.append() is thread-safe
+        Task { @MainActor [weak self] in
+            self?.recognitionRequest?.append(buffer)
+        }
     }
 
     // MARK: - Authorization
@@ -93,7 +107,7 @@ final class SpeechRecognitionManager: ObservableObject {
 
     // MARK: - Recognition
 
-    /// Start real-time speech recognition using device microphone
+    /// Start real-time speech recognition using shared audio engine
     func startRecognition() throws {
         guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
             throw SpeechRecognitionError.recognizerNotAvailable
@@ -101,6 +115,10 @@ final class SpeechRecognitionManager: ObservableObject {
 
         guard isAuthorized else {
             throw SpeechRecognitionError.notAuthorized
+        }
+
+        guard let audioEngine = audioEngine else {
+            throw SpeechRecognitionError.audioEngineError
         }
 
         // Cancel any ongoing recognition
@@ -117,23 +135,8 @@ final class SpeechRecognitionManager: ObservableObject {
 
         recognitionRequest = request
 
-        // Configure audio session
-        let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
-        try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
-
-        // Get input node
-        let inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-
-        // Install tap to feed audio to recognition request
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
-            request.append(buffer)
-        }
-
-        // Start audio engine
-        audioEngine.prepare()
-        try audioEngine.start()
+        // Register to receive audio buffers from shared engine
+        audioEngine.addConsumer(self)
 
         // Start recognition task
         recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
@@ -163,7 +166,7 @@ final class SpeechRecognitionManager: ObservableObject {
 
         isRecognizing = true
         statusMessage = "🎙️ Listening..."
-        print("✅ Speech recognition started")
+        print("✅ Speech recognition started (using shared audio engine)")
     }
 
     /// Stop speech recognition
@@ -172,9 +175,10 @@ final class SpeechRecognitionManager: ObservableObject {
 
         print("⏹️ Stopping speech recognition...")
 
-        // Stop audio engine
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        // Unregister from shared audio engine
+        if let audioEngine = audioEngine {
+            audioEngine.removeConsumer(self)
+        }
 
         // Cancel recognition
         recognitionRequest?.endAudio()
@@ -185,6 +189,13 @@ final class SpeechRecognitionManager: ObservableObject {
 
         isRecognizing = false
         statusMessage = isAuthorized ? "Speech recognition ready" : "Speech recognition disabled"
+
+        // Deactivate audio session if no other consumers are active
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            print("⚠️ Failed to deactivate audio session: \(error)")
+        }
 
         print("✅ Speech recognition stopped")
     }

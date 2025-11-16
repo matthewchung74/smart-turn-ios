@@ -31,10 +31,15 @@ struct StateLogEntry: Identifiable {
         }
     }
 
-    var timeString: String {
+    // Cached DateFormatter for performance (DateFormatter initialization is expensive)
+    private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "mm:ss"
-        return formatter.string(from: timestamp)
+        return formatter
+    }()
+
+    var timeString: String {
+        Self.timeFormatter.string(from: timestamp)
     }
 }
 

@@ -15,6 +15,12 @@ import AVFoundation
 import Accelerate
 import Combine
 
+/// Protocol for objects that want to receive raw audio buffers
+protocol AudioBufferConsumer: AnyObject {
+    /// Called when a new audio buffer is available (on background thread)
+    func didReceiveAudioBuffer(_ buffer: AVAudioPCMBuffer)
+}
+
 /// Errors that can occur during audio capture
 enum AudioCaptureError: Error {
     case microphoneNotAuthorized
@@ -67,6 +73,10 @@ final class AudioCaptureEngine: ObservableObject {
 
     // For sample rate conversion
     private var converter: AVAudioConverter?
+
+    // Audio buffer consumers (for speech recognition, etc.)
+    private var consumers: [WeakAudioBufferConsumer] = []
+    private let consumersLock = NSLock()
 
     // MARK: - Initialization
 
@@ -163,6 +173,28 @@ final class AudioCaptureEngine: ObservableObject {
         bufferLock.unlock()
     }
 
+    /// Register an audio buffer consumer (e.g., speech recognition)
+    func addConsumer(_ consumer: AudioBufferConsumer) {
+        consumersLock.lock()
+        defer { consumersLock.unlock() }
+
+        // Remove any deallocated consumers
+        consumers.removeAll { $0.value == nil }
+
+        // Add new consumer
+        consumers.append(WeakAudioBufferConsumer(value: consumer))
+        print("📢 Audio consumer registered (total: \(consumers.count))")
+    }
+
+    /// Unregister an audio buffer consumer
+    func removeConsumer(_ consumer: AudioBufferConsumer) {
+        consumersLock.lock()
+        defer { consumersLock.unlock() }
+
+        consumers.removeAll { $0.value === consumer || $0.value == nil }
+        print("📢 Audio consumer unregistered (remaining: \(consumers.count))")
+    }
+
     // MARK: - Private Methods
 
     private func configureAudioSession() throws {
@@ -235,6 +267,17 @@ final class AudioCaptureEngine: ObservableObject {
 
     /// Process captured audio buffer
     private func processCapturedAudio(buffer: AVAudioPCMBuffer) {
+        // Distribute raw buffer to consumers FIRST (before conversion)
+        // This allows speech recognition to get the original high-quality buffer
+        consumersLock.lock()
+        let currentConsumers = consumers.compactMap { $0.value }
+        consumersLock.unlock()
+
+        for consumer in currentConsumers {
+            consumer.didReceiveAudioBuffer(buffer)
+        }
+
+        // Now proceed with conversion for turn detection
         guard let converter = converter else { return }
 
         // Calculate output buffer capacity
@@ -293,6 +336,13 @@ final class AudioCaptureEngine: ObservableObject {
             self.bufferDuration = currentBufferDuration
         }
     }
+}
+
+// MARK: - Weak Consumer Wrapper
+
+/// Weak wrapper to avoid retain cycles with audio buffer consumers
+private struct WeakAudioBufferConsumer {
+    weak var value: AudioBufferConsumer?
 }
 
 // MARK: - Audio Level Helpers

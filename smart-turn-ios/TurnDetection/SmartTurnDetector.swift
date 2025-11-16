@@ -104,7 +104,7 @@ final class SmartTurnDetector: ObservableObject {
     private let audioEngine: AudioCaptureEngine
 
     // Apple Speech recognition manager for speech-to-text
-    let speechRecognitionManager = SpeechRecognitionManager()
+    let speechRecognitionManager: SpeechRecognitionManager
 
     // Performance tracking
     private var inferenceHistory: [Double] = []
@@ -114,6 +114,9 @@ final class SmartTurnDetector: ObservableObject {
 
     init?(audioEngine: AudioCaptureEngine) {
         self.audioEngine = audioEngine
+
+        // Initialize speech recognition with shared audio engine
+        self.speechRecognitionManager = SpeechRecognitionManager(audioEngine: audioEngine)
 
         // Initialize feature extractor
         do {
@@ -311,8 +314,9 @@ final class SmartTurnDetector: ObservableObject {
 
 extension SmartTurnDetector {
     /// Run detection and update published state
+    /// Completion handler is always called on MainActor for thread safety
     func detectTurnAndUpdate(completion: ((TurnDetectionResult?) -> Void)? = nil) {
-        Task {
+        Task { @MainActor in
             do {
                 let result = try await detectTurn()
                 print("""
