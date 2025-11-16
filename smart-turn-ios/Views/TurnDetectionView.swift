@@ -49,6 +49,7 @@ enum RecordingState: Equatable {
     case starting                       // Requesting permissions and initializing
     case recording                      // Active: audio capture + speech recognition + silence monitoring
     case detectingTurn                  // Running ONNX turn detection inference
+    case cooldown                       // Post-detection cooldown (prevents re-triggering during same silence)
     case stopping                       // Cleaning up resources
     case error(String)                  // Error state with message
 
@@ -58,6 +59,7 @@ enum RecordingState: Equatable {
         case .starting: return "Starting..."
         case .recording: return "Recording"
         case .detectingTurn: return "Detecting Turn"
+        case .cooldown: return "Cooldown"
         case .stopping: return "Stopping..."
         case .error(let message): return "Error: \(message)"
         }
@@ -79,9 +81,15 @@ enum RecordingState: Equatable {
         case (.recording, .error): return true
 
         // From detectingTurn
-        case (.detectingTurn, .recording): return true
+        case (.detectingTurn, .cooldown): return true
+        case (.detectingTurn, .recording): return true  // If no cooldown needed
         case (.detectingTurn, .stopping): return true
         case (.detectingTurn, .error): return true
+
+        // From cooldown
+        case (.cooldown, .recording): return true  // Speaking detected, exit cooldown
+        case (.cooldown, .stopping): return true
+        case (.cooldown, .error): return true
 
         // From stopping
         case (.stopping, .idle): return true
@@ -131,7 +139,6 @@ struct TurnDetectionView: View {
 
     // Silence detection state
     @State private var silenceStartTime: Date?
-    @State private var hasDetectedThisSilence = false  // Prevents re-triggering during same silence period
     @State private var resultDisplayTimer: Timer?
 
     // Silence detection thresholds
@@ -451,6 +458,8 @@ struct TurnDetectionView: View {
             return .green
         case .detectingTurn:
             return .blue
+        case .cooldown:
+            return .yellow
         case .error:
             return .red
         }
@@ -482,7 +491,7 @@ struct TurnDetectionView: View {
         switch recordingState {
         case .idle, .error:
             startRecording()
-        case .recording, .detectingTurn:
+        case .recording, .detectingTurn, .cooldown:
             stopRecording()
         case .starting, .stopping:
             // Already transitioning, ignore
@@ -592,7 +601,6 @@ struct TurnDetectionView: View {
         resultDisplayTimer?.invalidate()
         resultDisplayTimer = nil
         silenceStartTime = nil
-        hasDetectedThisSilence = false
         detector.clearResult()
     }
 
@@ -615,22 +623,20 @@ struct TurnDetectionView: View {
         print("🔊 Audio: \(String(format: "%.1f", currentDB)) dB (RMS: \(String(format: "%.4f", currentLevel))) | Silent: \(isSilent) | Buffer: \(String(format: "%.1f", audioEngine.bufferDuration))s")
 
         if isSilent {
-            // Start silence tracking if not already started
-            if silenceStartTime == nil && audioEngine.bufferDuration >= minimumBufferForDetection {
+            // Start silence tracking if not already started (and not in cooldown)
+            if silenceStartTime == nil && audioEngine.bufferDuration >= minimumBufferForDetection && recordingState != .cooldown {
                 silenceStartTime = Date()
-                hasDetectedThisSilence = false  // Reset flag for new silence period
                 print("🟡 Silence started (buffer ready)")
             }
 
-            // Check if we've been silent long enough to trigger detection
-            if let silenceStart = silenceStartTime {
+            // Check if we've been silent long enough to trigger detection (only if not in cooldown)
+            if let silenceStart = silenceStartTime, recordingState == .recording {
                 let silenceDuration = Date().timeIntervalSince(silenceStart)
                 print("⏱️  Silence duration: \(String(format: "%.1f", silenceDuration))s")
 
-                // Trigger detection once per silence period (talking → 1s silence transition)
-                if silenceDuration >= self.silenceDuration && !hasDetectedThisSilence {
+                // Trigger detection once per silence period
+                if silenceDuration >= self.silenceDuration {
                     print("✅ TRIGGERING TURN DETECTION")
-                    hasDetectedThisSilence = true  // Prevent re-triggering during same silence
 
                     // Transition to detectingTurn state
                     self.transitionTo(.detectingTurn)
@@ -686,20 +692,25 @@ struct TurnDetectionView: View {
                             }
                         }
 
-                        // Transition back to recording state
-                        self.transitionTo(.recording)
+                        // Transition to cooldown state to prevent re-triggering
+                        self.transitionTo(.cooldown)
                     }
                 }
             }
         } else {
-            // Speaking detected - reset silence tracking
+            // Speaking detected - reset silence tracking and exit cooldown if needed
             if silenceStartTime != nil {
                 print("🟢 Speaking detected")
                 addLog("🗣️ Speaking detected", level: .info)
             }
 
             silenceStartTime = nil
-            hasDetectedThisSilence = false
+
+            // Exit cooldown state when speaking is detected
+            if recordingState == .cooldown {
+                transitionTo(.recording)
+                addLog("🔄 Exited cooldown (speaking detected)", level: .info)
+            }
 
             // Cancel auto-clear timer and clear result
             resultDisplayTimer?.invalidate()
