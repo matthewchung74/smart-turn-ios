@@ -200,7 +200,7 @@ struct TurnDetectionView: View {
             Image(systemName: "waveform.circle.fill")
                 .font(.system(size: 60))
                 .foregroundStyle(recordingStatusColor)
-                .symbolEffect(.pulse, isActive: recordingState == .recording)
+                .symbolEffect(.pulse, isActive: recordingState == .recording || recordingState == .cooldown)
 
             if recordingState == .starting {
                 ProgressView()
@@ -209,7 +209,9 @@ struct TurnDetectionView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {
-                Text(recordingState == .recording ? "Listening..." : recordingState.description)
+                // Show "Listening..." for both Recording and Cooldown states
+                let isActivelyRecording = recordingState == .recording || recordingState == .cooldown
+                Text(isActivelyRecording ? "Listening..." : recordingState.description)
                     .font(.headline)
                     .foregroundColor(.secondary)
             }
@@ -301,12 +303,29 @@ struct TurnDetectionView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
 
-                            // Placeholder when empty
+                            // Placeholder when empty - show loading state during startup
                             if accumulatedTranscription.isEmpty && detector.speechRecognitionManager.transcribedText.isEmpty {
-                                Text("Transcription will appear here...")
-                                    .font(.body)
-                                    .foregroundColor(.secondary)
+                                if recordingState == .starting {
+                                    HStack(spacing: 12) {
+                                        ProgressView()
+                                            .progressViewStyle(.circular)
+                                        Text("Initializing speech recognition...")
+                                            .font(.body)
+                                            .foregroundColor(.secondary)
+                                    }
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                                } else if recordingState == .recording || recordingState == .cooldown {
+                                    Text("Speak to see transcription...")
+                                        .font(.body)
+                                        .foregroundColor(.secondary)
+                                        .italic()
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                } else {
+                                    Text("Transcription will appear here...")
+                                        .font(.body)
+                                        .foregroundColor(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
                             }
 
                             // Invisible anchor for auto-scroll
@@ -435,9 +454,11 @@ struct TurnDetectionView: View {
                     }
                     .frame(maxWidth: .infinity)
                 } else {
+                    // Show "Stop" for both Recording and Cooldown (we're still actively recording)
+                    let isActivelyRecording = recordingState == .recording || recordingState == .cooldown
                     Label(
-                        recordingState == .recording ? "Stop" : "Start",
-                        systemImage: recordingState == .recording ? "stop.circle.fill" : "mic.circle.fill"
+                        isActivelyRecording ? "Stop" : "Start",
+                        systemImage: isActivelyRecording ? "stop.circle.fill" : "mic.circle.fill"
                     )
                     .font(.title3)
                     .fontWeight(.semibold)
@@ -445,7 +466,7 @@ struct TurnDetectionView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .tint(recordingState == .recording ? .red : .green)
+            .tint(recordingState == .recording || recordingState == .cooldown ? .red : .green)
             .disabled(recordingState == .starting || recordingState == .stopping)
             .controlSize(.large)
         }
@@ -736,16 +757,14 @@ struct TurnDetectionView: View {
 
         detector.speechRecognitionManager.stopRecognition()
 
-        // Capture state version to detect if user stops recording during restart delay
-        let capturedVersion = stateVersion
-
         // Wait for audio engine to fully stop before restarting
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000) // 500ms delay
 
-            // Check if state changed during delay (e.g., user stopped recording)
-            guard self.stateVersion == capturedVersion else {
-                print("⚠️ State changed during recognition restart delay, skipping restart")
+            // Check if we're still in a valid state for speech recognition
+            // (Recording or Cooldown are both valid - Cooldown still needs transcription)
+            guard self.recordingState == .recording || self.recordingState == .cooldown else {
+                print("⚠️ Invalid state for recognition restart: \(self.recordingState.description), skipping")
                 return
             }
 

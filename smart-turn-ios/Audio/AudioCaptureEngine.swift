@@ -267,15 +267,30 @@ final class AudioCaptureEngine: ObservableObject {
         inputNode.removeTap(onBus: 0)
         print("🔧 Removed any existing audio tap")
 
-        // Get input format (usually 48kHz on modern devices)
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        print("🔧 Input format: \(inputFormat.sampleRate) Hz, \(inputFormat.channelCount) channels")
+        // CRITICAL: Use audio session's ACTUAL sample rate, not inputNode's cached format
+        // After audioEngine.reset(), inputNode.outputFormat() returns stale data
+        let actualSampleRate = AVAudioSession.sharedInstance().sampleRate
+        let actualChannels = AVAudioSession.sharedInstance().inputNumberOfChannels
+
+        print("🔧 Audio session actual: \(actualSampleRate) Hz, \(actualChannels) channels")
 
         // Check if format is valid (simulator often returns 0 Hz)
-        guard inputFormat.sampleRate > 0 else {
-            print("❌ Input format invalid (0 Hz sample rate)")
+        guard actualSampleRate > 0 else {
+            print("❌ Audio session sample rate invalid (0 Hz)")
             throw AudioCaptureError.invalidAudioFormat
         }
+
+        // Create input format based on actual audio session settings
+        guard let inputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: actualSampleRate,
+            channels: AVAudioChannelCount(actualChannels),
+            interleaved: false
+        ) else {
+            print("❌ Failed to create input format")
+            throw AudioCaptureError.invalidAudioFormat
+        }
+        print("🔧 Input format created: \(inputFormat.sampleRate) Hz, \(inputFormat.channelCount) channels")
 
         // Create target format (16kHz mono)
         guard let targetFormat = AVAudioFormat(
@@ -317,6 +332,26 @@ final class AudioCaptureEngine: ObservableObject {
 
     /// Process captured audio buffer
     private func processCapturedAudio(buffer: AVAudioPCMBuffer) {
+        // Skip empty buffers (happens during microphone initialization after sample rate change)
+        // Empty buffers have frameLength == 0 or all samples are zero
+        guard buffer.frameLength > 0 else {
+            print("⚠️ Skipping empty buffer (frameLength: 0)")
+            return
+        }
+
+        // Quick check: if buffer has data, verify it's not all zeros
+        if let channelData = buffer.floatChannelData?[0] {
+            var rms: Float = 0
+            vDSP_rmsqv(channelData, 1, &rms, vDSP_Length(buffer.frameLength))
+
+            // Skip if RMS is effectively zero (< 0.0001 = -80 dB)
+            // This filters out empty/silent initialization buffers
+            if rms < 0.0001 {
+                print("⚠️ Skipping silent buffer (RMS: \(String(format: "%.6f", rms)))")
+                return
+            }
+        }
+
         // Distribute raw buffer to consumers FIRST (before conversion)
         // This allows speech recognition to get the original high-quality buffer
         consumersLock.lock()
