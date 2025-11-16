@@ -6,14 +6,38 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		E97846FD2EC8004700179454 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = E97846FC2EC8004700179454 /* WhisperKit */; };
+		E97847052EC800BC00179454 /* onnxruntime in Frameworks */ = {isa = PBXBuildFile; productRef = E97847042EC800BC00179454 /* onnxruntime */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
-		E9E9FC532EC671960038327C /* smart-turn-ios.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = smart-turn-ios.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E9E9FC532EC671960038327C /* smart-turn-ios.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "smart-turn-ios.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		E97847062EC8028F00179454 /* Exceptions for "smart-turn-ios" folder in "smart-turn-ios" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"Models/WhisperKit/whisperkit-coreml/.gitattributes",
+				"Models/WhisperKit/whisperkit-coreml/.gitignore",
+				"Models/WhisperKit/whisperkit-coreml/config.json",
+				"Models/WhisperKit/whisperkit-coreml/README.md",
+			);
+			target = E9E9FC522EC671960038327C /* smart-turn-ios */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E9E9FC552EC671960038327C /* smart-turn-ios */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = smart-turn-ios;
+			exceptions = (
+				E97847062EC8028F00179454 /* Exceptions for "smart-turn-ios" folder in "smart-turn-ios" target */,
+			);
+			explicitFolders = (
+				"Models/WhisperKit/whisperkit-coreml/openai_whisper-base",
+			);
+			path = "smart-turn-ios";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -23,16 +47,26 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E97847052EC800BC00179454 /* onnxruntime in Frameworks */,
+				E97846FD2EC8004700179454 /* WhisperKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		E97845A12EC7EA9400179454 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		E9E9FC4A2EC671960038327C = {
 			isa = PBXGroup;
 			children = (
 				E9E9FC552EC671960038327C /* smart-turn-ios */,
+				E97845A12EC7EA9400179454 /* Frameworks */,
 				E9E9FC542EC671960038327C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -63,11 +97,12 @@
 			fileSystemSynchronizedGroups = (
 				E9E9FC552EC671960038327C /* smart-turn-ios */,
 			);
-			name = smart-turn-ios;
+			name = "smart-turn-ios";
 			packageProductDependencies = (
-				E9ONNX12345678901234567 /* onnxruntime */,
+				E97846FC2EC8004700179454 /* WhisperKit */,
+				E97847042EC800BC00179454 /* onnxruntime */,
 			);
-			productName = smart-turn-ios;
+			productName = "smart-turn-ios";
 			productReference = E9E9FC532EC671960038327C /* smart-turn-ios.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -96,7 +131,8 @@
 			mainGroup = E9E9FC4A2EC671960038327C;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				E9ONNX12345678901234566 /* XCRemoteSwiftPackageReference "onnxruntime-swift-package-manager" */,
+				E97846FB2EC8004700179454 /* XCRemoteSwiftPackageReference "WhisperKit" */,
+				E97847032EC800BC00179454 /* XCRemoteSwiftPackageReference "onnxruntime-swift-package-manager" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E9E9FC542EC671960038327C /* Products */;
@@ -261,6 +297,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs microphone access to detect when you've finished speaking using real-time audio analysis.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "This app uses speech recognition to provide real-time transcription of your speech.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -271,7 +308,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mclabs.smart-turn-ios;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.mclabs.smart-turn-ios";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -294,6 +331,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs microphone access to detect when you've finished speaking using real-time audio analysis.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "This app uses speech recognition to provide real-time transcription of your speech.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -304,7 +342,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mclabs.smart-turn-ios;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.mclabs.smart-turn-ios";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -340,7 +378,15 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		E9ONNX12345678901234566 /* XCRemoteSwiftPackageReference "onnxruntime-swift-package-manager" */ = {
+		E97846FB2EC8004700179454 /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/argmaxinc/WhisperKit.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+		E97847032EC800BC00179454 /* XCRemoteSwiftPackageReference "onnxruntime-swift-package-manager" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/microsoft/onnxruntime-swift-package-manager";
 			requirement = {
@@ -351,9 +397,14 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		E9ONNX12345678901234567 /* onnxruntime */ = {
+		E97846FC2EC8004700179454 /* WhisperKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = E9ONNX12345678901234566 /* XCRemoteSwiftPackageReference "onnxruntime-swift-package-manager" */;
+			package = E97846FB2EC8004700179454 /* XCRemoteSwiftPackageReference "WhisperKit" */;
+			productName = WhisperKit;
+		};
+		E97847042EC800BC00179454 /* onnxruntime */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E97847032EC800BC00179454 /* XCRemoteSwiftPackageReference "onnxruntime-swift-package-manager" */;
 			productName = onnxruntime;
 		};
 /* End XCSwiftPackageProductDependency section */

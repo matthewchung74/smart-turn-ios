@@ -45,10 +45,13 @@ struct TurnDetectionView: View {
     @State private var showPermissionAlert = false
     @State private var silenceMonitorTimer: Timer?
     @State private var isStarting = false
-    @State private var showInstructions = true
 
     // State history log
     @State private var stateLog: [StateLogEntry] = []
+
+    // Accumulated transcription with line breaks
+    @State private var accumulatedTranscription: String = ""
+    @State private var lastSegmentText: String = ""
 
     // Silence detection state
     @State private var silenceStartTime: Date?
@@ -75,14 +78,6 @@ struct TurnDetectionView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
-                    // Instructions (dismissible)
-                    if showInstructions {
-                        instructionsSection
-                    }
-
-                    // Header
-                    headerSection
-
                     // Turn Detection Indicator (MAIN FOCUS)
                     turnIndicatorSection
 
@@ -96,6 +91,9 @@ struct TurnDetectionView: View {
                     controlsSection
                 }
                 .padding()
+            }
+            .onAppear {
+                print("✅ App launched - Speech recognition will be enabled when you press Start")
             }
             .alert("Microphone Permission Required", isPresented: $showPermissionAlert) {
                 Button("Open Settings") {
@@ -111,56 +109,6 @@ struct TurnDetectionView: View {
     }
 
     // MARK: - View Components
-
-    private var instructionsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("How to Use", systemImage: "info.circle.fill")
-                    .font(.headline)
-                    .foregroundColor(.blue)
-                Spacer()
-                Button("Dismiss") {
-                    withAnimation {
-                        showInstructions = false
-                    }
-                }
-                .font(.caption)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                instructionRow(number: "1", text: "Tap **Start** - app records last 8 seconds of audio")
-                instructionRow(number: "2", text: "**Speak naturally** - fill buffer to at least 0.5s")
-                instructionRow(number: "3", text: "**Pause for 1.5 seconds** - triggers detection")
-                instructionRow(number: "4", text: "**Green** = Turn change detected, **Orange** = Not detected")
-            }
-            .font(.subheadline)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("📊 **Audio Buffer**: Rolling 8-second window of your speech")
-                    .font(.caption2)
-                Text("📜 **State History**: Timestamped log of all detection events")
-                    .font(.caption2)
-            }
-            .foregroundColor(.secondary)
-            .padding(.top, 4)
-        }
-        .padding()
-        .background(Color.blue.opacity(0.1))
-        .cornerRadius(12)
-    }
-
-    private func instructionRow(number: String, text: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text(number)
-                .font(.caption)
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-                .frame(width: 20, height: 20)
-                .background(Circle().fill(Color.blue))
-            Text(try! AttributedString(markdown: text))
-                .foregroundColor(.primary)
-        }
-    }
 
     private var headerSection: some View {
         VStack(spacing: 8) {
@@ -242,53 +190,114 @@ struct TurnDetectionView: View {
     }
 
     private var turnIndicatorSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("State History")
+        VStack(alignment: .leading, spacing: 16) {
+            // Transcription Box
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Transcription")
                     .font(.headline)
                     .foregroundColor(.secondary)
-                Spacer()
-                if !stateLog.isEmpty {
-                    Button("Clear") {
-                        stateLog.removeAll()
+
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            // Show accumulated transcription (completed segments)
+                            if !accumulatedTranscription.isEmpty {
+                                Text(accumulatedTranscription)
+                                    .font(.body)
+                                    .foregroundColor(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+
+                            // Show current live transcription (in progress)
+                            if !detector.speechRecognitionManager.transcribedText.isEmpty {
+                                Text(detector.speechRecognitionManager.transcribedText)
+                                    .font(.body)
+                                    .foregroundColor(.blue)  // Blue for live/in-progress
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+
+                            // Placeholder when empty
+                            if accumulatedTranscription.isEmpty && detector.speechRecognitionManager.transcribedText.isEmpty {
+                                Text("Transcription will appear here...")
+                                    .font(.body)
+                                    .foregroundColor(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+
+                            // Invisible anchor for auto-scroll
+                            Color.clear
+                                .frame(height: 1)
+                                .id("bottom")
+                        }
+                        .padding(12)
                     }
-                    .font(.caption)
+                    .frame(height: 100)
+                    .background(Color.black.opacity(0.05))
+                    .cornerRadius(8)
+                    .onChange(of: detector.speechRecognitionManager.transcribedText) {
+                        // Auto-scroll to bottom when transcription updates
+                        withAnimation {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    }
+                    .onChange(of: accumulatedTranscription) {
+                        // Auto-scroll when new segment is added
+                        withAnimation {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    }
                 }
             }
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if stateLog.isEmpty {
-                            Text("Press Start to begin...")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .padding()
-                        } else {
-                            ForEach(stateLog) { entry in
-                                HStack(alignment: .top, spacing: 8) {
-                                    Text("[\(entry.timeString)]")
-                                        .font(.system(.caption, design: .monospaced))
-                                        .foregroundColor(.secondary)
+            // State History
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("State History")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    if !stateLog.isEmpty {
+                        Button("Clear") {
+                            stateLog.removeAll()
+                        }
+                        .font(.caption)
+                    }
+                }
 
-                                    Text(entry.message)
-                                        .font(.caption)
-                                        .foregroundColor(entry.level.color)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            if stateLog.isEmpty {
+                                Text("Press Start to begin...")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .padding()
+                            } else {
+                                ForEach(stateLog) { entry in
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Text("[\(entry.timeString)]")
+                                            .font(.system(.caption, design: .monospaced))
+                                            .foregroundColor(.secondary)
+
+                                        Text(entry.message)
+                                            .font(.caption)
+                                            .foregroundColor(entry.level.color)
+                                    }
+                                    .id(entry.id)
                                 }
-                                .id(entry.id)
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                }
-                .frame(height: 250)
-                .background(Color.black.opacity(0.05))
-                .cornerRadius(8)
-                .onChange(of: stateLog.count) { _ in
-                    if let lastEntry = stateLog.last {
-                        withAnimation {
-                            proxy.scrollTo(lastEntry.id, anchor: .bottom)
+                    .frame(height: 200)
+                    .background(Color.black.opacity(0.05))
+                    .cornerRadius(8)
+                    .onChange(of: stateLog.count) {
+                        if let lastEntry = stateLog.last {
+                            withAnimation {
+                                proxy.scrollTo(lastEntry.id, anchor: .bottom)
+                            }
                         }
                     }
                 }
@@ -301,7 +310,30 @@ struct TurnDetectionView: View {
 
     private var controlsSection: some View {
         VStack(spacing: 16) {
-            // Start/Stop Recording (only button needed)
+            // Speech Recognition Status
+            HStack {
+                Image(systemName: "apple.logo")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text("Real-time transcription")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                if detector.speechRecognitionManager.isAuthorized {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .font(.caption)
+                } else {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                        .font(.caption)
+                }
+            }
+            .padding(.vertical, 4)
+
+            // Start/Stop Recording Button
             Button {
                 handleRecordingToggle()
             } label: {
@@ -377,7 +409,19 @@ struct TurnDetectionView: View {
         isStarting = true
 
         Task {
-            // Check permission (this may take a few seconds on first launch)
+            // First, enable speech recognition and request permission if needed
+            await MainActor.run {
+                if !detector.speechRecognitionManager.isEnabled {
+                    detector.speechRecognitionManager.isEnabled = true
+                }
+            }
+
+            // Wait a moment for authorization to complete if needed
+            if !detector.speechRecognitionManager.isAuthorized {
+                await detector.speechRecognitionManager.requestAuthorization()
+            }
+
+            // Check microphone permission (this may take a few seconds on first launch)
             let hasPermission = await audioEngine.requestMicrophonePermission()
 
             await MainActor.run {
@@ -387,7 +431,20 @@ struct TurnDetectionView: View {
                         isStarting = false
                         addLog("🎙️ Recording started", level: .success)
 
-                        // Start monitoring for silence to trigger detection
+                        // Start Apple Speech recognition if authorized
+                        if detector.speechRecognitionManager.isAuthorized {
+                            do {
+                                try detector.speechRecognitionManager.startRecognition()
+                                addLog("🎙️ Real-time transcription started", level: .success)
+                            } catch {
+                                addLog("❌ Transcription failed: \(error.localizedDescription)", level: .error)
+                                print("❌ Speech recognition error: \(error)")
+                            }
+                        } else {
+                            addLog("⚠️ Speech recognition not authorized", level: .warning)
+                        }
+
+                        // Start monitoring for silence to trigger turn detection
                         startSilenceMonitoring()
                     } catch {
                         print("❌ Failed to start capture: \(error)")
@@ -405,6 +462,17 @@ struct TurnDetectionView: View {
     private func stopRecording() {
         audioEngine.stopCapture()
         stopSilenceMonitoring()
+
+        // Stop Apple Speech recognition
+        if detector.speechRecognitionManager.isRecognizing {
+            detector.speechRecognitionManager.stopRecognition()
+            addLog("⏹️ Transcription stopped", level: .info)
+        }
+
+        // Clear accumulated transcription
+        accumulatedTranscription = ""
+        lastSegmentText = ""
+
         addLog("⏹️ Recording stopped", level: .info)
     }
 
@@ -456,18 +524,45 @@ struct TurnDetectionView: View {
 
                 // Trigger detection once per silence period (talking → 1s silence transition)
                 if silenceDuration >= self.silenceDuration && !hasDetectedThisSilence {
-                    print("✅ TRIGGERING DETECTION")
+                    print("✅ TRIGGERING TURN DETECTION")
                     hasDetectedThisSilence = true  // Prevent re-triggering during same silence
 
-                    // Run detection and log result after completion
+                    // Run turn detection only (streaming handles transcription)
                     detector.detectTurnAndUpdate { result in
                         guard let result = result else { return }
 
+                        // Log result without utterance (transcription shown separately)
                         let resultText = result.isTurnComplete
                             ? "✅ Turn change detected (\(result.probabilityPercentage))"
                             : "⏳ Turn change not detected (\(result.probabilityPercentage))"
 
                         self.addLog(resultText, level: result.isTurnComplete ? .success : .warning)
+
+                        // Add current transcription segment to accumulated text with separator
+                        let utterance = self.detector.speechRecognitionManager.transcribedText
+                        if !utterance.isEmpty && utterance != self.lastSegmentText {
+                            if !self.accumulatedTranscription.isEmpty {
+                                self.accumulatedTranscription += "\n----------\n"
+                            }
+                            self.accumulatedTranscription += utterance
+                            self.lastSegmentText = utterance
+
+                            // Restart speech recognition to get fresh segment (with delay for audio engine)
+                            if self.detector.speechRecognitionManager.isRecognizing {
+                                self.detector.speechRecognitionManager.stopRecognition()
+
+                                // Wait for audio engine to fully stop before restarting
+                                Task { @MainActor in
+                                    try? await Task.sleep(nanoseconds: 500_000_000) // 500ms delay
+                                    do {
+                                        try self.detector.speechRecognitionManager.startRecognition()
+                                        print("✅ Speech recognition restarted successfully")
+                                    } catch {
+                                        print("❌ Failed to restart recognition: \(error)")
+                                    }
+                                }
+                            }
+                        }
 
                         // Auto-clear result after 3 seconds
                         self.resultDisplayTimer?.invalidate()

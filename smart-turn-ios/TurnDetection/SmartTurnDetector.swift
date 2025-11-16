@@ -103,6 +103,9 @@ final class SmartTurnDetector: ObservableObject {
     private let featureExtractor: WhisperFeatureExtractor
     private let audioEngine: AudioCaptureEngine
 
+    // Apple Speech recognition manager for speech-to-text
+    let speechRecognitionManager = SpeechRecognitionManager()
+
     // Performance tracking
     private var inferenceHistory: [Double] = []
     private let maxHistorySize = 10
@@ -334,6 +337,9 @@ extension SmartTurnDetector {
     func clearResult() {
         lastResult = nil
     }
+
+    // Note: Transcription is now handled separately by SpeechRecognitionManager
+    // which runs continuously in real-time, not batch-based like WhisperKit
 }
 
 // MARK: - Performance Monitoring
