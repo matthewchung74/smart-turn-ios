@@ -1,6 +1,6 @@
 //
 //  AudioCaptureEngine.swift
-//  meh
+//  smart-turn-ios
 //
 //  Real-time audio capture at 16kHz for turn detection.
 //
@@ -9,6 +9,34 @@
 //  - Convert to 16kHz mono PCM
 //  - Buffer up to 8 seconds of audio
 //  - Provide audio chunks for turn detection
+//
+//  CRITICAL: AVAudioEngine Bug Workaround
+//  =====================================
+//  This class recreates AVAudioEngine on EVERY start to work around a critical Apple bug
+//  where reusing the same engine instance causes tap callbacks to stop firing.
+//
+//  Bug Symptoms (if engine is reused):
+//  - First start: Works perfectly ✅
+//  - Second start: BROKEN ❌ - tap callback never fires, no audio captured
+//  - Third start: Works ✅
+//  - Fourth start: BROKEN ❌
+//  - Pattern: Alternating success/failure on every other restart
+//
+//  Root Cause:
+//  AVAudioEngine becomes corrupted during stop/start cycles. Even though:
+//  - audioEngine.start() succeeds (no error)
+//  - audioEngine.isRunning returns true
+//  - installTap() succeeds (no error)
+//  The tap callback is never invoked, resulting in zero audio data.
+//  The engine then silently stops itself mid-session.
+//
+//  Solution:
+//  1. Declare audioEngine as `var` (not `let`) and implicitly unwrapped optional
+//  2. Create fresh instance on EVERY startCapture(): `audioEngine = AVAudioEngine()`
+//  3. Deallocate on EVERY stopCapture(): `audioEngine = nil`
+//  4. NEVER call audioEngine.reset() - it leaves engine in corrupted state
+//
+//  DO NOT REFACTOR to reuse the engine instance - this will break audio on every other start!
 //
 
 import AVFoundation
@@ -66,9 +94,17 @@ final class AudioCaptureEngine: ObservableObject {
     @Published private(set) var audioLevel: Float = 0.0
     @Published private(set) var bufferDuration: Double = 0.0
 
-    // CRITICAL: Must be var, not let - we recreate the engine on each start
-    // AVAudioEngine has a bug where reusing the same instance after stop/start
-    // causes tap callbacks to never fire (engine reports running but tap is dead)
+    // CRITICAL: AVAudioEngine instance (recreated on every start)
+    // ============================================================
+    // MUST be `var` and implicitly unwrapped optional (not `let` or regular optional)
+    // because we recreate the entire engine on every startCapture() call.
+    //
+    // Why recreate instead of reuse?
+    // - AVAudioEngine has a bug where tap callbacks stop firing after stop/start
+    // - Symptoms: alternating success/failure (works, broken, works, broken...)
+    // - Only fix: Create fresh instance every time (see file header for details)
+    //
+    // DO NOT change to `let` or reuse - this will break audio on every other start!
     private var audioEngine: AVAudioEngine!
     private var audioBuffer: [Float] = []
     private let bufferLock = NSLock()
@@ -86,7 +122,9 @@ final class AudioCaptureEngine: ObservableObject {
     // MARK: - Initialization
 
     init() {
-        // No initialization needed - audioEngine.inputNode is accessed dynamically
+        // No initialization needed:
+        // - audioEngine is created on-demand in startCapture() (workaround for Apple bug)
+        // - All other properties have default values
     }
 
     // MARK: - Public Methods
@@ -135,15 +173,24 @@ final class AudioCaptureEngine: ObservableObject {
 
         print("🎙️ Starting audio capture...")
 
-        // CRITICAL FIX: Recreate AVAudioEngine on each start
-        // AVAudioEngine has a bug where reusing the same instance causes tap callbacks
-        // to never fire after the first stop/start cycle. Symptoms:
-        // - audioEngine.start() succeeds
-        // - audioEngine.isRunning returns true
-        // - Tap installation succeeds
-        // - BUT: Tap callback never fires (no audio data)
-        // - Engine silently stops itself mid-session
-        // Solution: Always create a fresh engine instance
+        // CRITICAL FIX: Recreate AVAudioEngine on EVERY start
+        // ====================================================
+        // This recreates the entire AVAudioEngine instance from scratch to work around
+        // an Apple bug where reusing the same instance after stop/start causes tap
+        // callbacks to never fire (alternating success/failure pattern).
+        //
+        // Evidence of the bug (if engine is reused):
+        // - audioEngine.start() succeeds (no error thrown)
+        // - audioEngine.isRunning returns true (engine claims to be running)
+        // - installTap() succeeds (no error thrown)
+        // - BUT: The tap callback is NEVER invoked (zero audio data captured)
+        // - Engine then silently stops itself (isRunning becomes false mid-session)
+        // - Pattern: 1st start works, 2nd fails, 3rd works, 4th fails, etc.
+        //
+        // This bug was discovered through extensive testing and the ONLY reliable fix
+        // is to create a completely fresh AVAudioEngine instance on every start.
+        //
+        // DO NOT optimize this by caching/reusing the engine - it WILL break audio!
         audioEngine = AVAudioEngine()
         print("🔧 Created fresh AVAudioEngine instance")
 
@@ -195,14 +242,15 @@ final class AudioCaptureEngine: ObservableObject {
         }
 
         // ALWAYS remove tap (even if we think there isn't one)
-        // This prevents format mismatch crashes on restart
+        // This prevents format mismatch crashes and ensures clean shutdown
         audioEngine.inputNode.removeTap(onBus: 0)
         print("✅ Audio tap removed")
 
-        // NOTE: We do NOT call audioEngine.reset() here because:
-        // - reset() leaves the engine in an invalid/corrupted state
-        // - On next start, we recreate the entire AVAudioEngine instance fresh
-        // - This is the only reliable way to avoid AVAudioEngine tap callback bugs
+        // IMPORTANT: We do NOT call audioEngine.reset() here because:
+        // - reset() leaves the engine in a corrupted/invalid state
+        // - This causes tap callbacks to fail on subsequent starts
+        // - Instead, we deallocate the entire engine (see below) and create fresh on next start
+        // - This is the ONLY reliable way to avoid AVAudioEngine tap callback bugs
 
         isRecording = false
 
@@ -225,7 +273,13 @@ final class AudioCaptureEngine: ObservableObject {
             print("⚠️ Failed to deactivate audio session: \(error)")
         }
 
-        // Deallocate engine - will be recreated on next start
+        // CRITICAL: Deallocate the entire AVAudioEngine instance
+        // =======================================================
+        // This is part of the workaround for the AVAudioEngine tap callback bug.
+        // By setting to nil, we force complete deallocation and release all resources.
+        // On next startCapture(), we create a completely fresh instance from scratch.
+        //
+        // DO NOT skip this step - it's essential for the bug workaround to work!
         audioEngine = nil
         print("✅ Audio engine deallocated")
 
@@ -288,12 +342,15 @@ final class AudioCaptureEngine: ObservableObject {
 
     private func setupAudioTap() throws {
         // Remove any existing tap first to prevent format mismatch crashes
-        // This is safe even if no tap exists
+        // This is safe even if no tap exists (no-op if no tap installed)
         audioEngine.inputNode.removeTap(onBus: 0)
         print("🔧 Removed any existing audio tap")
 
-        // CRITICAL: Use audio session's ACTUAL sample rate
-        // Query the audio session directly for the current hardware sample rate
+        // CRITICAL: Query audio session's ACTUAL hardware sample rate
+        // ===========================================================
+        // DO NOT use inputNode.outputFormat(forBus:) - it returns stale/cached format!
+        // After engine recreation, the cached format doesn't match actual hardware.
+        // Always query AVAudioSession directly for current hardware configuration.
         let actualSampleRate = AVAudioSession.sharedInstance().sampleRate
         let rawChannels = AVAudioSession.sharedInstance().inputNumberOfChannels
 
@@ -339,11 +396,15 @@ final class AudioCaptureEngine: ObservableObject {
         self.converter = converter
         print("✅ Audio converter created")
 
-        // Install tap with the ACTUAL input format (not a hardcoded one)
+        // Install tap with the ACTUAL hardware input format
+        // ==================================================
+        // CRITICAL: Must use the inputFormat we created from AVAudioSession.sampleRate
+        // DO NOT use a hardcoded format or inputNode.outputFormat(forBus:) - format mismatch!
+        // The format parameter MUST match the actual hardware configuration.
         audioEngine.inputNode.installTap(
             onBus: 0,
             bufferSize: Self.processingBufferSize,
-            format: inputFormat  // Use the actual hardware format
+            format: inputFormat  // MUST be actual hardware format from audio session
         ) { [weak self] buffer, _ in
             self?.processCapturedAudio(buffer: buffer)
         }
