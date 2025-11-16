@@ -342,8 +342,8 @@ extension SmartTurnDetector {
         lastResult = nil
     }
 
-    // Note: Transcription is now handled separately by SpeechRecognitionManager
-    // which runs continuously in real-time, not batch-based like WhisperKit
+    // Note: Transcription is handled by SpeechRecognitionManager
+    // which runs continuously in real-time using Apple's Speech framework
 }
 
 // MARK: - Performance Monitoring

@@ -15,28 +15,9 @@
 		E9E9FC532EC671960038327C /* smart-turn-ios.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "smart-turn-ios.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		E97847062EC8028F00179454 /* Exceptions for "smart-turn-ios" folder in "smart-turn-ios" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				"Models/WhisperKit/whisperkit-coreml/.gitattributes",
-				"Models/WhisperKit/whisperkit-coreml/.gitignore",
-				"Models/WhisperKit/whisperkit-coreml/config.json",
-				"Models/WhisperKit/whisperkit-coreml/README.md",
-			);
-			target = E9E9FC522EC671960038327C /* smart-turn-ios */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E9E9FC552EC671960038327C /* smart-turn-ios */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				E97847062EC8028F00179454 /* Exceptions for "smart-turn-ios" folder in "smart-turn-ios" target */,
-			);
-			explicitFolders = (
-				"Models/WhisperKit/whisperkit-coreml/openai_whisper-base",
-			);
 			path = "smart-turn-ios";
 			sourceTree = "<group>";
 		};
