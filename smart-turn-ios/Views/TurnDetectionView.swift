@@ -104,18 +104,19 @@ struct TurnDetectionView: View {
     @StateObject private var detector: SmartTurnDetector
 
     // State machine
-    @State private var recordingState: RecordingState = .idle {
-        didSet {
-            // Validate state transition
-            guard oldValue.canTransition(to: recordingState) else {
-                print("⚠️ Invalid state transition: \(oldValue.description) → \(recordingState.description)")
-                recordingState = oldValue  // Revert
-                return
-            }
+    @State private var recordingState: RecordingState = .idle
 
-            print("🔄 State transition: \(oldValue.description) → \(recordingState.description)")
-            addLog("State: \(recordingState.description)", level: .info)
+    // State transition method (validates before mutation)
+    private func transitionTo(_ newState: RecordingState) {
+        guard recordingState.canTransition(to: newState) else {
+            print("⚠️ Invalid state transition: \(recordingState.description) → \(newState.description)")
+            return
         }
+
+        let oldState = recordingState
+        recordingState = newState
+        print("🔄 State transition: \(oldState.description) → \(newState.description)")
+        addLog("State: \(newState.description)", level: .info)
     }
 
     @State private var showPermissionAlert = false
@@ -491,7 +492,7 @@ struct TurnDetectionView: View {
 
     private func startRecording() {
         // Transition to starting state
-        recordingState = .starting
+        transitionTo(.starting)
 
         Task {
             // First, enable speech recognition and request permission if needed
@@ -511,7 +512,7 @@ struct TurnDetectionView: View {
 
             await MainActor.run {
                 guard hasPermission else {
-                    recordingState = .error("Microphone permission denied")
+                    transitionTo(.error("Microphone permission denied"))
                     showPermissionAlert = true
                     return
                 }
@@ -538,11 +539,11 @@ struct TurnDetectionView: View {
                     startSilenceMonitoring()
 
                     // Transition to recording state
-                    recordingState = .recording
+                    transitionTo(.recording)
 
                 } catch {
                     print("❌ Failed to start capture: \(error)")
-                    recordingState = .error(error.localizedDescription)
+                    transitionTo(.error(error.localizedDescription))
                 }
             }
         }
@@ -550,7 +551,7 @@ struct TurnDetectionView: View {
 
     private func stopRecording() {
         // Transition to stopping state
-        recordingState = .stopping
+        transitionTo(.stopping)
 
         // Stop audio capture
         audioEngine.stopCapture()
@@ -569,7 +570,7 @@ struct TurnDetectionView: View {
         addLog("⏹️ Recording stopped", level: .info)
 
         // Transition to idle state
-        recordingState = .idle
+        transitionTo(.idle)
     }
 
     private func startSilenceMonitoring() {
@@ -632,13 +633,13 @@ struct TurnDetectionView: View {
                     hasDetectedThisSilence = true  // Prevent re-triggering during same silence
 
                     // Transition to detectingTurn state
-                    self.recordingState = .detectingTurn
+                    self.transitionTo(.detectingTurn)
 
                     // Run turn detection only (streaming handles transcription)
                     detector.detectTurnAndUpdate { result in
                         guard let result = result else {
                             // Detection failed, return to recording
-                            self.recordingState = .recording
+                            self.transitionTo(.recording)
                             return
                         }
 
@@ -686,7 +687,7 @@ struct TurnDetectionView: View {
                         }
 
                         // Transition back to recording state
-                        self.recordingState = .recording
+                        self.transitionTo(.recording)
                     }
                 }
             }
