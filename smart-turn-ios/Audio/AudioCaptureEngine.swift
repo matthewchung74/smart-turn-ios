@@ -67,7 +67,6 @@ final class AudioCaptureEngine: ObservableObject {
     @Published private(set) var bufferDuration: Double = 0.0
 
     private let audioEngine = AVAudioEngine()
-    private let inputNode: AVAudioInputNode
     private var audioBuffer: [Float] = []
     private let bufferLock = NSLock()
 
@@ -84,7 +83,7 @@ final class AudioCaptureEngine: ObservableObject {
     // MARK: - Initialization
 
     init() {
-        self.inputNode = audioEngine.inputNode
+        // No initialization needed - audioEngine.inputNode is accessed dynamically
     }
 
     // MARK: - Public Methods
@@ -182,7 +181,7 @@ final class AudioCaptureEngine: ObservableObject {
 
         // ALWAYS remove tap (even if we think there isn't one)
         // This prevents format mismatch crashes on restart
-        inputNode.removeTap(onBus: 0)
+        audioEngine.inputNode.removeTap(onBus: 0)
         print("✅ Audio tap removed")
 
         // Reset audio engine to clear internal state
@@ -270,11 +269,11 @@ final class AudioCaptureEngine: ObservableObject {
     private func setupAudioTap() throws {
         // Remove any existing tap first to prevent format mismatch crashes
         // This is safe even if no tap exists
-        inputNode.removeTap(onBus: 0)
+        audioEngine.inputNode.removeTap(onBus: 0)
         print("🔧 Removed any existing audio tap")
 
-        // CRITICAL: Use audio session's ACTUAL sample rate, not inputNode's cached format
-        // After audioEngine.reset(), inputNode.outputFormat() returns stale data
+        // CRITICAL: Use audio session's ACTUAL sample rate
+        // Query the audio session directly for the current hardware sample rate
         let actualSampleRate = AVAudioSession.sharedInstance().sampleRate
         let rawChannels = AVAudioSession.sharedInstance().inputNumberOfChannels
 
@@ -321,7 +320,7 @@ final class AudioCaptureEngine: ObservableObject {
         print("✅ Audio converter created")
 
         // Install tap with the ACTUAL input format (not a hardcoded one)
-        inputNode.installTap(
+        audioEngine.inputNode.installTap(
             onBus: 0,
             bufferSize: Self.processingBufferSize,
             format: inputFormat  // Use the actual hardware format
