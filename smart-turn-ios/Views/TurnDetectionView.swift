@@ -530,6 +530,7 @@ struct TurnDetectionView: View {
             .tint(recordingState == .recording || recordingState == .cooldown ? .red : .green)
             .disabled(recordingState == .starting || recordingState == .stopping)
             .controlSize(.large)
+            .animation(.none, value: recordingState)  // Disable animation for instant feedback
         }
     }
 
