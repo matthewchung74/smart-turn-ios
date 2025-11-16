@@ -13,24 +13,30 @@ SmartTurn is an iOS application that uses machine learning to detect conversatio
 ### Key Features
 
 - **Real-time Audio Processing**: Captures and analyzes audio with 16kHz sampling
+- **Live Speech Recognition**: Uses Apple's Speech framework for real-time transcription during recording
 - **ML-Powered Detection**: Uses ONNX Runtime with INT8 quantized model for efficient inference
 - **Silence-Based Triggering**: Automatically detects turn completion after 1.5 seconds of silence
 - **Visual Feedback**: Live audio level visualization and state history logging
 - **8-Second Rolling Buffer**: Maintains context of recent speech for accurate detection
 - **Low Latency**: Optimized for <12ms inference time on mobile devices
+- **Auto-Resume**: Speech recognition automatically restarts after turn detection cooldown
 
 ## How It Works
 
 1. **Audio Capture**: Records audio using the device microphone at 16kHz
-2. **Feature Extraction**: Converts audio to Whisper-compatible mel-spectrogram features (80 mel bins × 800 frames)
-3. **Silence Detection**: Monitors audio levels to detect pauses in speech
-4. **ML Inference**: Runs ONNX model to predict turn completion probability
-5. **Result Display**: Shows detection results with confidence scores in the UI
+2. **Speech Recognition**: Real-time transcription using Apple's Speech framework (displayed live in UI)
+3. **Feature Extraction**: Converts audio to Whisper-compatible mel-spectrogram features (80 mel bins × 800 frames)
+4. **Silence Detection**: Monitors audio levels to detect pauses in speech
+5. **ML Inference**: Runs ONNX model to predict turn completion probability after 1.5s silence
+6. **Cooldown State**: After turn detection, temporarily pauses recognition until speaking resumes
+7. **Auto-Resume**: Automatically restarts speech recognition when speaking is detected again
+8. **Result Display**: Shows detection results, transcription, and confidence scores in the UI
 
 ## Technical Stack
 
 - **Language**: Swift 5.0
 - **ML Runtime**: ONNX Runtime 1.20.0+
+- **Speech Recognition**: Apple Speech framework (on-device + cloud)
 - **Audio Processing**: AVFoundation + Accelerate framework
 - **UI Framework**: SwiftUI
 - **Deployment Target**: iOS 17.0+
@@ -41,15 +47,16 @@ SmartTurn is an iOS application that uses machine learning to detect conversatio
 ```
 smart-turn-ios/
 ├── Audio/
-│   ├── AudioCaptureEngine.swift      # Audio capture and buffering
-│   └── WhisperFeatureExtractor.swift # Mel-spectrogram feature extraction
+│   ├── AudioCaptureEngine.swift       # Audio capture and buffering (with AVAudioEngine bug workaround)
+│   ├── SpeechRecognitionManager.swift # Apple Speech framework integration
+│   └── WhisperFeatureExtractor.swift  # Mel-spectrogram feature extraction
 ├── TurnDetection/
-│   └── SmartTurnDetector.swift       # ONNX Runtime inference coordinator
+│   └── SmartTurnDetector.swift        # ONNX Runtime inference coordinator
 ├── Views/
-│   └── TurnDetectionView.swift       # Main UI with audio visualization
+│   └── TurnDetectionView.swift        # Main UI with audio visualization and transcription
 ├── Models/
-│   └── smart-turn-v3.0.onnx          # Trained turn detection model
-└── ContentView.swift                  # Root view
+│   └── smart-turn-v3.0.onnx           # Trained turn detection model
+└── ContentView.swift                   # Root view
 ```
 
 ## Setup
@@ -92,14 +99,18 @@ The project uses Swift Package Manager for dependencies:
 
 ## Usage
 
-1. **Grant Microphone Permission**: On first launch, allow microphone access
+1. **Grant Permissions**: On first launch, allow microphone and speech recognition access
 2. **Start Recording**: Tap the "Start" button to begin audio capture
 3. **Speak Naturally**: The app maintains a rolling 8-second buffer of your speech
-4. **Pause to Detect**: After speaking, pause for 1.5 seconds to trigger detection
+   - Live transcription appears in real-time
+   - Audio level visualizer shows speaking activity
+4. **Pause to Detect**: After speaking, pause for 1.5 seconds to trigger turn detection
 5. **View Results**:
-   - **Green**: Turn change detected (probability ≥50%)
-   - **Orange**: Turn change not detected (probability <50%)
-6. **State History**: Review timestamped log of all detection events
+   - **Turn Detection**: Green (detected) or Orange (not detected) with probability
+   - **Transcription**: Live speech-to-text appears during recording
+   - **State History**: Timestamped log of all detection events
+6. **Cooldown State**: After turn detection, recognition pauses until you speak again
+7. **Auto-Resume**: Speech recognition automatically restarts when speaking is detected
 
 ### Detection Parameters
 
@@ -155,6 +166,43 @@ ONNX Inference (turn prediction)
 UI Update (probability + state log)
 ```
 
+### Critical: AVAudioEngine Bug Workaround
+
+⚠️ **IMPORTANT FOR DEVELOPERS**: This app works around a critical Apple bug in AVAudioEngine.
+
+**The Bug**:
+When reusing the same `AVAudioEngine` instance after stop/start cycles, the audio tap callback stops firing, causing an alternating success/failure pattern:
+- 1st start: ✅ Works perfectly
+- 2nd start: ❌ BROKEN - no audio captured (tap callback never fires)
+- 3rd start: ✅ Works
+- 4th start: ❌ BROKEN
+- Pattern continues indefinitely
+
+**Root Cause**:
+AVAudioEngine becomes internally corrupted during stop/start cycles. Even though:
+- `audioEngine.start()` succeeds (no error)
+- `audioEngine.isRunning` returns `true`
+- `installTap()` succeeds (no error)
+
+The tap callback is **never invoked**, resulting in zero audio data. The engine then silently stops itself mid-session.
+
+**The Solution**:
+`AudioCaptureEngine.swift` recreates the **entire AVAudioEngine instance** on every start:
+```swift
+// In startCapture():
+audioEngine = AVAudioEngine()  // Fresh instance every time
+
+// In stopCapture():
+audioEngine = nil  // Complete deallocation
+```
+
+**⚠️ DO NOT REFACTOR**:
+- Do NOT cache/reuse the engine instance
+- Do NOT call `audioEngine.reset()` - it causes corruption
+- Do NOT use `inputNode.outputFormat(forBus:)` - returns stale format
+
+See extensive comments in `AudioCaptureEngine.swift` for full details.
+
 ## Troubleshooting
 
 ### Model Not Found Error
@@ -187,6 +235,24 @@ UI Update (probability + state log)
 2. Use Release build configuration for better performance
 3. Check that ONNX Runtime optimization level is set to `.all` (`SmartTurnDetector.swift:144`)
 
+### Speech Recognition Not Working
+**Issue**: No transcription appears or "Speech recognition disabled"
+**Solution**:
+1. Grant speech recognition permission: Settings → Privacy & Security → Speech Recognition
+2. Enable the toggle in the app UI (top right)
+3. Ensure microphone permission is also granted
+4. Check for error messages in Xcode console
+5. Note: Speech recognition requires internet for cloud processing (partial results work offline)
+
+### Audio Capture Fails on Every Other Start
+**Issue**: Audio works on first start, fails on second, works on third, etc.
+**Solution**:
+This indicates the AVAudioEngine bug workaround was removed or broken. Check that:
+1. `AudioCaptureEngine.swift` creates a fresh `AVAudioEngine()` in `startCapture()`
+2. `audioEngine` is set to `nil` in `stopCapture()`
+3. `audioEngine.reset()` is NOT being called anywhere
+4. See "Critical: AVAudioEngine Bug Workaround" section above for details
+
 ## Development
 
 ### Building for Release
@@ -209,9 +275,13 @@ xcodebuild test -scheme smart-turn-ios -destination 'platform=iOS Simulator,name
 ### Code Structure
 
 - **Audio Capture**: `AudioCaptureEngine.swift` handles microphone input, resampling, and buffer management
+  - ⚠️ Includes critical AVAudioEngine bug workaround (see Implementation Notes above)
+- **Speech Recognition**: `SpeechRecognitionManager.swift` manages Apple Speech framework integration
+  - Real-time transcription with auto-resume after turn detection
 - **Feature Extraction**: `WhisperFeatureExtractor.swift` converts audio to mel-spectrograms
 - **Turn Detection**: `SmartTurnDetector.swift` coordinates ONNX inference and result processing
-- **UI Layer**: `TurnDetectionView.swift` provides real-time visualization and user interaction
+- **UI Layer**: `TurnDetectionView.swift` provides real-time visualization, transcription, and user interaction
+  - State machine: Idle → Starting → Recording → Detecting Turn → Cooldown → Recording
 
 ## License
 
