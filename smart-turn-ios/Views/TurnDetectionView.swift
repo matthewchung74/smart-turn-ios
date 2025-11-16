@@ -490,70 +490,103 @@ struct TurnDetectionView: View {
     // MARK: - Actions
 
     private func handleRecordingToggle() {
+        print("🔘 [TOGGLE] Button pressed, current state: \(recordingState.description)")
+
         switch recordingState {
         case .idle, .error:
+            print("🔘 [TOGGLE] Calling startRecording()")
             startRecording()
         case .recording, .detectingTurn, .cooldown:
+            print("🔘 [TOGGLE] Calling stopRecording()")
             stopRecording()
         case .starting, .stopping:
             // Already transitioning, ignore
+            print("🔘 [TOGGLE] Ignoring - already in transitioning state")
             break
         }
     }
 
     private func startRecording() {
+        // Guard against multiple simultaneous starts (race condition before button disables)
+        switch recordingState {
+        case .idle, .error:
+            break  // OK to start
+        default:
+            print("⚠️ [START] Ignoring duplicate start request, current state: \(recordingState.description)")
+            addLog("⚠️ Already starting/recording, ignoring", level: .warning)
+            return
+        }
+
+        print("🎬 [START] Beginning start sequence from state: \(recordingState.description)")
+
         // Transition to starting state
         transitionTo(.starting)
 
         Task {
+            print("🔄 [START] Task started, requesting speech recognition...")
+
             // First, enable speech recognition and request permission if needed
             await MainActor.run {
                 if !detector.speechRecognitionManager.isEnabled {
+                    print("🔄 [START] Enabling speech recognition...")
                     detector.speechRecognitionManager.isEnabled = true
                 }
             }
 
             // Wait a moment for authorization to complete if needed
             if !detector.speechRecognitionManager.isAuthorized {
+                print("🔄 [START] Requesting speech recognition authorization...")
                 await detector.speechRecognitionManager.requestAuthorization()
+                print("✅ [START] Speech authorization complete")
             }
 
             // Check microphone permission (this may take a few seconds on first launch)
+            print("🔄 [START] Requesting microphone permission...")
             let hasPermission = await audioEngine.requestMicrophonePermission()
+            print("✅ [START] Microphone permission: \(hasPermission)")
 
             await MainActor.run {
                 guard hasPermission else {
+                    print("❌ [START] Microphone permission denied, transitioning to error")
                     transitionTo(.error("Microphone permission denied"))
                     showPermissionAlert = true
                     return
                 }
 
+                print("🔄 [START] Starting audio capture...")
+
                 do {
                     // Start audio capture
                     try audioEngine.startCapture()
+                    print("✅ [START] Audio capture started")
                     addLog("🎙️ Recording started", level: .success)
 
                     // Start Apple Speech recognition if authorized
                     if detector.speechRecognitionManager.isAuthorized {
+                        print("🔄 [START] Starting speech recognition...")
                         do {
                             try detector.speechRecognitionManager.startRecognition()
+                            print("✅ [START] Speech recognition started")
                             addLog("🎙️ Real-time transcription started", level: .success)
                         } catch {
+                            print("❌ [START] Speech recognition failed: \(error)")
                             addLog("❌ Transcription failed: \(error.localizedDescription)", level: .error)
-                            print("❌ Speech recognition error: \(error)")
                         }
                     } else {
+                        print("⚠️ [START] Speech recognition not authorized")
                         addLog("⚠️ Speech recognition not authorized", level: .warning)
                     }
 
                     // Start monitoring for silence to trigger turn detection
+                    print("🔄 [START] Starting silence monitoring...")
                     startSilenceMonitoring()
 
                     // Transition to recording state
+                    print("✅ [START] Transitioning to recording state")
                     transitionTo(.recording)
 
                 } catch {
-                    print("❌ Failed to start capture: \(error)")
+                    print("❌ [START] Failed to start capture: \(error)")
                     transitionTo(.error(error.localizedDescription))
                 }
             }
@@ -561,6 +594,8 @@ struct TurnDetectionView: View {
     }
 
     private func stopRecording() {
+        print("⏹️ [STOP] Stop requested, current state: \(recordingState.description)")
+
         // Transition to stopping state
         transitionTo(.stopping)
 
