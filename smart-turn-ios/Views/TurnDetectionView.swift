@@ -43,13 +43,83 @@ struct StateLogEntry: Identifiable {
     }
 }
 
+/// State machine for recording lifecycle
+enum RecordingState: Equatable {
+    case idle                           // Not recording, ready to start
+    case starting                       // Requesting permissions and initializing
+    case recording                      // Active: audio capture + speech recognition + silence monitoring
+    case detectingTurn                  // Running ONNX turn detection inference
+    case stopping                       // Cleaning up resources
+    case error(String)                  // Error state with message
+
+    var description: String {
+        switch self {
+        case .idle: return "Idle"
+        case .starting: return "Starting..."
+        case .recording: return "Recording"
+        case .detectingTurn: return "Detecting Turn"
+        case .stopping: return "Stopping..."
+        case .error(let message): return "Error: \(message)"
+        }
+    }
+
+    /// Valid state transitions
+    func canTransition(to newState: RecordingState) -> Bool {
+        switch (self, newState) {
+        // From idle
+        case (.idle, .starting): return true
+
+        // From starting
+        case (.starting, .recording): return true
+        case (.starting, .error): return true
+
+        // From recording
+        case (.recording, .detectingTurn): return true
+        case (.recording, .stopping): return true
+        case (.recording, .error): return true
+
+        // From detectingTurn
+        case (.detectingTurn, .recording): return true
+        case (.detectingTurn, .stopping): return true
+        case (.detectingTurn, .error): return true
+
+        // From stopping
+        case (.stopping, .idle): return true
+        case (.stopping, .error): return true
+
+        // From error
+        case (.error, .idle): return true
+        case (.error, .starting): return true
+
+        // Self-transition allowed
+        case _ where self == newState: return true
+
+        default: return false
+        }
+    }
+}
+
 struct TurnDetectionView: View {
     @StateObject private var audioEngine = AudioCaptureEngine()
     @StateObject private var detector: SmartTurnDetector
 
+    // State machine
+    @State private var recordingState: RecordingState = .idle {
+        didSet {
+            // Validate state transition
+            guard oldValue.canTransition(to: recordingState) else {
+                print("⚠️ Invalid state transition: \(oldValue.description) → \(recordingState.description)")
+                recordingState = oldValue  // Revert
+                return
+            }
+
+            print("🔄 State transition: \(oldValue.description) → \(recordingState.description)")
+            addLog("State: \(recordingState.description)", level: .info)
+        }
+    }
+
     @State private var showPermissionAlert = false
     @State private var silenceMonitorTimer: Timer?
-    @State private var isStarting = false
 
     // State history log
     @State private var stateLog: [StateLogEntry] = []
@@ -120,16 +190,16 @@ struct TurnDetectionView: View {
             Image(systemName: "waveform.circle.fill")
                 .font(.system(size: 60))
                 .foregroundStyle(recordingStatusColor)
-                .symbolEffect(.pulse, isActive: audioEngine.isRecording)
+                .symbolEffect(.pulse, isActive: recordingState == .recording)
 
-            if isStarting {
+            if recordingState == .starting {
                 ProgressView()
                     .padding(.top, 8)
                 Text("Starting audio...")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {
-                Text(audioEngine.isRecording ? "Listening..." : "Ready")
+                Text(recordingState == .recording ? "Listening..." : recordingState.description)
                     .font(.headline)
                     .foregroundColor(.secondary)
             }
@@ -342,19 +412,19 @@ struct TurnDetectionView: View {
             Button {
                 handleRecordingToggle()
             } label: {
-                if isStarting {
+                if recordingState == .starting || recordingState == .stopping {
                     HStack {
                         ProgressView()
                             .progressViewStyle(.circular)
                             .tint(.white)
-                        Text("Starting...")
+                        Text(recordingState.description)
                             .fontWeight(.semibold)
                     }
                     .frame(maxWidth: .infinity)
                 } else {
                     Label(
-                        audioEngine.isRecording ? "Stop" : "Start",
-                        systemImage: audioEngine.isRecording ? "stop.circle.fill" : "mic.circle.fill"
+                        recordingState == .recording ? "Stop" : "Start",
+                        systemImage: recordingState == .recording ? "stop.circle.fill" : "mic.circle.fill"
                     )
                     .font(.title3)
                     .fontWeight(.semibold)
@@ -362,8 +432,8 @@ struct TurnDetectionView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .tint(audioEngine.isRecording ? .red : .green)
-            .disabled(isStarting)
+            .tint(recordingState == .recording ? .red : .green)
+            .disabled(recordingState == .starting || recordingState == .stopping)
             .controlSize(.large)
         }
     }
@@ -371,12 +441,17 @@ struct TurnDetectionView: View {
     // MARK: - Computed Properties
 
     private var recordingStatusColor: Color {
-        if detector.isProcessing {
-            return .blue
-        } else if audioEngine.isRecording {
-            return .green
-        } else {
+        switch recordingState {
+        case .idle:
             return .gray
+        case .starting, .stopping:
+            return .orange
+        case .recording:
+            return .green
+        case .detectingTurn:
+            return .blue
+        case .error:
+            return .red
         }
     }
 
@@ -403,15 +478,20 @@ struct TurnDetectionView: View {
     // MARK: - Actions
 
     private func handleRecordingToggle() {
-        if audioEngine.isRecording {
-            stopRecording()
-        } else {
+        switch recordingState {
+        case .idle, .error:
             startRecording()
+        case .recording, .detectingTurn:
+            stopRecording()
+        case .starting, .stopping:
+            // Already transitioning, ignore
+            break
         }
     }
 
     private func startRecording() {
-        isStarting = true
+        // Transition to starting state
+        recordingState = .starting
 
         Task {
             // First, enable speech recognition and request permission if needed
@@ -430,41 +510,49 @@ struct TurnDetectionView: View {
             let hasPermission = await audioEngine.requestMicrophonePermission()
 
             await MainActor.run {
-                if hasPermission {
-                    do {
-                        try audioEngine.startCapture()
-                        isStarting = false
-                        addLog("🎙️ Recording started", level: .success)
-
-                        // Start Apple Speech recognition if authorized
-                        if detector.speechRecognitionManager.isAuthorized {
-                            do {
-                                try detector.speechRecognitionManager.startRecognition()
-                                addLog("🎙️ Real-time transcription started", level: .success)
-                            } catch {
-                                addLog("❌ Transcription failed: \(error.localizedDescription)", level: .error)
-                                print("❌ Speech recognition error: \(error)")
-                            }
-                        } else {
-                            addLog("⚠️ Speech recognition not authorized", level: .warning)
-                        }
-
-                        // Start monitoring for silence to trigger turn detection
-                        startSilenceMonitoring()
-                    } catch {
-                        print("❌ Failed to start capture: \(error)")
-                        detector.errorMessage = error.localizedDescription
-                        isStarting = false
-                    }
-                } else {
-                    isStarting = false
+                guard hasPermission else {
+                    recordingState = .error("Microphone permission denied")
                     showPermissionAlert = true
+                    return
+                }
+
+                do {
+                    // Start audio capture
+                    try audioEngine.startCapture()
+                    addLog("🎙️ Recording started", level: .success)
+
+                    // Start Apple Speech recognition if authorized
+                    if detector.speechRecognitionManager.isAuthorized {
+                        do {
+                            try detector.speechRecognitionManager.startRecognition()
+                            addLog("🎙️ Real-time transcription started", level: .success)
+                        } catch {
+                            addLog("❌ Transcription failed: \(error.localizedDescription)", level: .error)
+                            print("❌ Speech recognition error: \(error)")
+                        }
+                    } else {
+                        addLog("⚠️ Speech recognition not authorized", level: .warning)
+                    }
+
+                    // Start monitoring for silence to trigger turn detection
+                    startSilenceMonitoring()
+
+                    // Transition to recording state
+                    recordingState = .recording
+
+                } catch {
+                    print("❌ Failed to start capture: \(error)")
+                    recordingState = .error(error.localizedDescription)
                 }
             }
         }
     }
 
     private func stopRecording() {
+        // Transition to stopping state
+        recordingState = .stopping
+
+        // Stop audio capture
         audioEngine.stopCapture()
         stopSilenceMonitoring()
 
@@ -479,6 +567,9 @@ struct TurnDetectionView: View {
         lastSegmentText = ""
 
         addLog("⏹️ Recording stopped", level: .info)
+
+        // Transition to idle state
+        recordingState = .idle
     }
 
     private func startSilenceMonitoring() {
@@ -532,9 +623,16 @@ struct TurnDetectionView: View {
                     print("✅ TRIGGERING TURN DETECTION")
                     hasDetectedThisSilence = true  // Prevent re-triggering during same silence
 
+                    // Transition to detectingTurn state
+                    self.recordingState = .detectingTurn
+
                     // Run turn detection only (streaming handles transcription)
                     detector.detectTurnAndUpdate { result in
-                        guard let result = result else { return }
+                        guard let result = result else {
+                            // Detection failed, return to recording
+                            self.recordingState = .recording
+                            return
+                        }
 
                         // Log result without utterance (transcription shown separately)
                         let resultText = result.isTurnComplete
@@ -578,6 +676,9 @@ struct TurnDetectionView: View {
                                 self.addLog("🔄 Result cleared", level: .info)
                             }
                         }
+
+                        // Transition back to recording state
+                        self.recordingState = .recording
                     }
                 }
             }
