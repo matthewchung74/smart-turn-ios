@@ -78,6 +78,9 @@ final class AudioCaptureEngine: ObservableObject {
     private var consumers: [WeakAudioBufferConsumer] = []
     private let consumersLock = NSLock()
 
+    // Flag to track if we've logged empty buffer warnings (suppress repeated logs)
+    private var hasLoggedEmptyBuffers = false
+
     // MARK: - Initialization
 
     init() {
@@ -129,6 +132,9 @@ final class AudioCaptureEngine: ObservableObject {
         }
 
         print("🎙️ Starting audio capture...")
+
+        // Reset empty buffer logging flag for new session
+        hasLoggedEmptyBuffers = false
 
         // Check permission
         guard microphonePermissionStatus else {
@@ -270,9 +276,12 @@ final class AudioCaptureEngine: ObservableObject {
         // CRITICAL: Use audio session's ACTUAL sample rate, not inputNode's cached format
         // After audioEngine.reset(), inputNode.outputFormat() returns stale data
         let actualSampleRate = AVAudioSession.sharedInstance().sampleRate
-        let actualChannels = AVAudioSession.sharedInstance().inputNumberOfChannels
+        let rawChannels = AVAudioSession.sharedInstance().inputNumberOfChannels
 
-        print("🔧 Audio session actual: \(actualSampleRate) Hz, \(actualChannels) channels")
+        // Ensure at least 1 channel (some devices may report 0 if no mic connected)
+        let actualChannels = max(1, rawChannels)
+
+        print("🔧 Audio session actual: \(actualSampleRate) Hz, \(rawChannels) channels (using: \(actualChannels))")
 
         // Check if format is valid (simulator often returns 0 Hz)
         guard actualSampleRate > 0 else {
@@ -335,7 +344,10 @@ final class AudioCaptureEngine: ObservableObject {
         // Skip empty buffers (happens during microphone initialization after sample rate change)
         // Empty buffers have frameLength == 0 or all samples are zero
         guard buffer.frameLength > 0 else {
-            print("⚠️ Skipping empty buffer (frameLength: 0)")
+            if !hasLoggedEmptyBuffers {
+                print("⚠️ Skipping empty buffers (frameLength: 0) - mic initializing...")
+                hasLoggedEmptyBuffers = true
+            }
             return
         }
 
@@ -347,9 +359,18 @@ final class AudioCaptureEngine: ObservableObject {
             // Skip if RMS is effectively zero (< 0.0001 = -80 dB)
             // This filters out empty/silent initialization buffers
             if rms < 0.0001 {
-                print("⚠️ Skipping silent buffer (RMS: \(String(format: "%.6f", rms)))")
+                if !hasLoggedEmptyBuffers {
+                    print("⚠️ Skipping silent buffers (RMS < 0.0001) - mic initializing...")
+                    hasLoggedEmptyBuffers = true
+                }
                 return
             }
+        }
+
+        // If we reach here, we have valid audio data - reset the flag for next session
+        if hasLoggedEmptyBuffers {
+            print("✅ Microphone initialized - receiving audio data")
+            hasLoggedEmptyBuffers = false
         }
 
         // Distribute raw buffer to consumers FIRST (before conversion)
