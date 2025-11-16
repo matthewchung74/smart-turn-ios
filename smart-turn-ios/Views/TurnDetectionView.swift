@@ -604,10 +604,12 @@ struct TurnDetectionView: View {
         detector.clearResult()
     }
 
-    private func monitorForSilence() {
-        // Calculate RMS from the most recent 0.1s of audio (1600 samples @ 16kHz)
+    // MARK: - Silence Monitoring (Refactored)
+
+    /// Calculate current audio level from recent samples
+    private func calculateCurrentAudioLevel() -> (rms: Float, db: Float, isSilent: Bool) {
         let samples = audioEngine.getCurrentBuffer()
-        guard !samples.isEmpty else { return }
+        guard !samples.isEmpty else { return (0, -160, true) }
 
         let recentSamples = samples.suffix(1600)  // Last 0.1s (ArraySlice - no copy)
         var rms: Float = 0
@@ -615,108 +617,136 @@ struct TurnDetectionView: View {
             vDSP_rmsqv(buffer.baseAddress!, 1, &rms, vDSP_Length(buffer.count))
         }
 
-        let currentLevel = rms
-        let currentDB = audioEngine.rmsToDecibels(currentLevel)
-        let isSilent = currentLevel < silenceThreshold
+        let db = audioEngine.rmsToDecibels(rms)
+        let isSilent = rms < silenceThreshold
+        return (rms, db, isSilent)
+    }
+
+    /// Handle silence detected - track duration and trigger turn detection
+    private func handleSilenceDetected() {
+        // Start silence tracking if not already started (and not in cooldown)
+        if silenceStartTime == nil && audioEngine.bufferDuration >= minimumBufferForDetection && recordingState != .cooldown {
+            silenceStartTime = Date()
+            print("🟡 Silence started (buffer ready)")
+        }
+
+        // Check if we've been silent long enough to trigger detection (only if not in cooldown)
+        guard let silenceStart = silenceStartTime, recordingState == .recording else { return }
+
+        let silenceDuration = Date().timeIntervalSince(silenceStart)
+        print("⏱️  Silence duration: \(String(format: "%.1f", silenceDuration))s")
+
+        // Trigger detection once per silence period
+        if silenceDuration >= self.silenceDuration {
+            print("✅ TRIGGERING TURN DETECTION")
+            transitionTo(.detectingTurn)
+
+            detector.detectTurnAndUpdate { result in
+                self.handleTurnDetectionResult(result)
+            }
+        }
+    }
+
+    /// Handle turn detection result - log, accumulate transcription, transition state
+    private func handleTurnDetectionResult(_ result: TurnDetectionResult?) {
+        guard let result = result else {
+            // Detection failed, return to recording
+            transitionTo(.recording)
+            return
+        }
+
+        // Log result
+        let resultText = result.isTurnComplete
+            ? "✅ Turn change detected (\(result.probabilityPercentage))"
+            : "⏳ Turn change not detected (\(result.probabilityPercentage))"
+        addLog(resultText, level: result.isTurnComplete ? .success : .warning)
+
+        // Accumulate transcription and restart recognition
+        accumulateTranscriptionSegment()
+
+        // Auto-clear result after 3 seconds
+        setupAutoClearTimer()
+
+        // Transition to cooldown state to prevent re-triggering
+        transitionTo(.cooldown)
+    }
+
+    /// Accumulate current transcription segment and restart recognition
+    private func accumulateTranscriptionSegment() {
+        let utterance = detector.speechRecognitionManager.transcribedText
+        guard !utterance.isEmpty && utterance != lastSegmentText else { return }
+
+        // Add separator if needed
+        if !accumulatedTranscription.isEmpty {
+            accumulatedTranscription += "\n----------\n"
+        }
+        accumulatedTranscription += utterance
+        lastSegmentText = utterance
+
+        // Restart speech recognition to get fresh segment (with delay for audio engine)
+        guard detector.speechRecognitionManager.isRecognizing else { return }
+
+        detector.speechRecognitionManager.stopRecognition()
+
+        // Wait for audio engine to fully stop before restarting
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000) // 500ms delay
+            do {
+                try self.detector.speechRecognitionManager.startRecognition()
+                print("✅ Speech recognition restarted successfully")
+            } catch {
+                print("❌ Failed to restart recognition: \(error)")
+            }
+        }
+    }
+
+    /// Setup auto-clear timer to clear result after 3 seconds
+    private func setupAutoClearTimer() {
+        resultDisplayTimer?.invalidate()
+        resultDisplayTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+            Task { @MainActor in
+                self.detector.clearResult()
+                print("🔄 Auto-cleared result")
+                self.addLog("🔄 Result cleared", level: .info)
+            }
+        }
+    }
+
+    /// Handle speaking detected - exit cooldown, reset state, clear timers
+    private func handleSpeakingDetected() {
+        // Log if we were tracking silence
+        if silenceStartTime != nil {
+            print("🟢 Speaking detected")
+            addLog("🗣️ Speaking detected", level: .info)
+        }
+
+        silenceStartTime = nil
+
+        // Exit cooldown state when speaking is detected
+        if recordingState == .cooldown {
+            transitionTo(.recording)
+            addLog("🔄 Exited cooldown (speaking detected)", level: .info)
+        }
+
+        // Cancel auto-clear timer and clear result
+        resultDisplayTimer?.invalidate()
+        Task { @MainActor in
+            detector.clearResult()
+        }
+    }
+
+    /// Main silence monitoring method (now simplified - calls focused helper methods)
+    private func monitorForSilence() {
+        // Calculate current audio level
+        let (rms, db, isSilent) = calculateCurrentAudioLevel()
 
         // Debug: Log audio level and state
-        print("🔊 Audio: \(String(format: "%.1f", currentDB)) dB (RMS: \(String(format: "%.4f", currentLevel))) | Silent: \(isSilent) | Buffer: \(String(format: "%.1f", audioEngine.bufferDuration))s")
+        print("🔊 Audio: \(String(format: "%.1f", db)) dB (RMS: \(String(format: "%.4f", rms))) | Silent: \(isSilent) | Buffer: \(String(format: "%.1f", audioEngine.bufferDuration))s")
 
         if isSilent {
-            // Start silence tracking if not already started (and not in cooldown)
-            if silenceStartTime == nil && audioEngine.bufferDuration >= minimumBufferForDetection && recordingState != .cooldown {
-                silenceStartTime = Date()
-                print("🟡 Silence started (buffer ready)")
-            }
-
-            // Check if we've been silent long enough to trigger detection (only if not in cooldown)
-            if let silenceStart = silenceStartTime, recordingState == .recording {
-                let silenceDuration = Date().timeIntervalSince(silenceStart)
-                print("⏱️  Silence duration: \(String(format: "%.1f", silenceDuration))s")
-
-                // Trigger detection once per silence period
-                if silenceDuration >= self.silenceDuration {
-                    print("✅ TRIGGERING TURN DETECTION")
-
-                    // Transition to detectingTurn state
-                    self.transitionTo(.detectingTurn)
-
-                    // Run turn detection only (streaming handles transcription)
-                    detector.detectTurnAndUpdate { result in
-                        guard let result = result else {
-                            // Detection failed, return to recording
-                            self.transitionTo(.recording)
-                            return
-                        }
-
-                        // Log result without utterance (transcription shown separately)
-                        let resultText = result.isTurnComplete
-                            ? "✅ Turn change detected (\(result.probabilityPercentage))"
-                            : "⏳ Turn change not detected (\(result.probabilityPercentage))"
-
-                        self.addLog(resultText, level: result.isTurnComplete ? .success : .warning)
-
-                        // Add current transcription segment to accumulated text with separator
-                        let utterance = self.detector.speechRecognitionManager.transcribedText
-                        if !utterance.isEmpty && utterance != self.lastSegmentText {
-                            if !self.accumulatedTranscription.isEmpty {
-                                self.accumulatedTranscription += "\n----------\n"
-                            }
-                            self.accumulatedTranscription += utterance
-                            self.lastSegmentText = utterance
-
-                            // Restart speech recognition to get fresh segment (with delay for audio engine)
-                            if self.detector.speechRecognitionManager.isRecognizing {
-                                self.detector.speechRecognitionManager.stopRecognition()
-
-                                // Wait for audio engine to fully stop before restarting
-                                Task { @MainActor in
-                                    try? await Task.sleep(nanoseconds: 500_000_000) // 500ms delay
-                                    do {
-                                        try self.detector.speechRecognitionManager.startRecognition()
-                                        print("✅ Speech recognition restarted successfully")
-                                    } catch {
-                                        print("❌ Failed to restart recognition: \(error)")
-                                    }
-                                }
-                            }
-                        }
-
-                        // Auto-clear result after 3 seconds
-                        self.resultDisplayTimer?.invalidate()
-                        self.resultDisplayTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-                            Task { @MainActor in
-                                self.detector.clearResult()
-                                print("🔄 Auto-cleared result")
-                                self.addLog("🔄 Result cleared", level: .info)
-                            }
-                        }
-
-                        // Transition to cooldown state to prevent re-triggering
-                        self.transitionTo(.cooldown)
-                    }
-                }
-            }
+            handleSilenceDetected()
         } else {
-            // Speaking detected - reset silence tracking and exit cooldown if needed
-            if silenceStartTime != nil {
-                print("🟢 Speaking detected")
-                addLog("🗣️ Speaking detected", level: .info)
-            }
-
-            silenceStartTime = nil
-
-            // Exit cooldown state when speaking is detected
-            if recordingState == .cooldown {
-                transitionTo(.recording)
-                addLog("🔄 Exited cooldown (speaking detected)", level: .info)
-            }
-
-            // Cancel auto-clear timer and clear result
-            resultDisplayTimer?.invalidate()
-            Task { @MainActor in
-                detector.clearResult()
-            }
+            handleSpeakingDetected()
         }
     }
 }
