@@ -118,6 +118,20 @@ struct TurnDetectionView: View {
     // Timing measurement for loading indicator
     @State private var startingTimestamp: Date?
 
+    // Track whether we're waiting for first transcription to appear (keeps loading indicator visible)
+    @State private var isWaitingForFirstTranscription = false
+
+    // Timestamp formatter for timing logs (HH:mm:ss.SSS)
+    private static let timingFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss.SSS"
+        return formatter
+    }()
+
+    private func formatTimestamp(_ date: Date = Date()) -> String {
+        Self.timingFormatter.string(from: date)
+    }
+
     // State transition method (validates before mutation)
     private func transitionTo(_ newState: RecordingState) {
         guard recordingState.canTransition(to: newState) else {
@@ -133,12 +147,19 @@ struct TurnDetectionView: View {
 
         // Track loading indicator timing
         if newState == .starting {
-            startingTimestamp = Date()
-            print("⏱️ [TIMING] Loading indicator START")
+            // Only set timestamp if not already captured at button tap
+            if startingTimestamp == nil {
+                startingTimestamp = Date()
+            }
+            print("⏱️ [TIMING] Loading indicator START at \(formatTimestamp())")
         } else if newState == .recording, let startTime = startingTimestamp {
             let duration = Date().timeIntervalSince(startTime) * 1000  // Convert to ms
-            print("⏱️ [TIMING] Loading indicator END - Duration: \(String(format: "%.0f", duration))ms")
+            print("⏱️ [TIMING] Loading indicator END at \(formatTimestamp()) - Duration: \(String(format: "%.0f", duration))ms")
             startingTimestamp = nil
+
+            // Keep loading indicator visible until first transcription appears
+            isWaitingForFirstTranscription = true
+            print("⏱️ [TIMING] Waiting for first transcription at \(formatTimestamp())...")
         }
     }
 
@@ -318,11 +339,14 @@ struct TurnDetectionView: View {
 
                             // Placeholder when empty - show loading state during startup
                             if accumulatedTranscription.isEmpty && detector.speechRecognitionManager.transcribedText.isEmpty {
-                                if recordingState == .starting {
+                                // Show loading indicator during Starting OR early Recording (before first transcription)
+                                // This prevents showing "Speak to see transcription" when user IS speaking but
+                                // system hasn't produced first transcription yet (~1-2 second delay)
+                                if recordingState == .starting || (recordingState == .recording && isWaitingForFirstTranscription) {
                                     HStack(spacing: 12) {
                                         ProgressView()
                                             .progressViewStyle(.circular)
-                                        Text("Initializing speech recognition...")
+                                        Text(recordingState == .starting ? "Initializing speech recognition..." : "Listening...")
                                             .font(.body)
                                             .foregroundColor(.secondary)
                                     }
@@ -351,7 +375,13 @@ struct TurnDetectionView: View {
                     .frame(height: 100)
                     .background(Color.black.opacity(0.05))
                     .cornerRadius(8)
-                    .onChange(of: detector.speechRecognitionManager.transcribedText) {
+                    .onChange(of: detector.speechRecognitionManager.transcribedText) { oldValue, newValue in
+                        // Detect when first transcription appears and hide loading indicator
+                        if !newValue.isEmpty && isWaitingForFirstTranscription {
+                            isWaitingForFirstTranscription = false
+                            print("⏱️ [TIMING] First transcription appeared at \(formatTimestamp()) - hiding loading indicator")
+                        }
+
                         // Auto-scroll to bottom when transcription updates
                         withAnimation {
                             proxy.scrollTo("bottom", anchor: .bottom)
@@ -452,10 +482,28 @@ struct TurnDetectionView: View {
 
             // Start/Stop Recording Button
             Button {
-                let timestamp = Date().timeIntervalSince1970
-                print("👆 [TAP] Button tapped at \(timestamp), state: \(recordingState.description), disabled: \(recordingState == .starting || recordingState == .stopping)")
-                handleRecordingToggle()
-                print("👆 [TAP] handleRecordingToggle() returned")
+                let tapTime = Date()
+                print("👆 [TAP] Button tapped at \(formatTimestamp(tapTime)), state: \(recordingState.description), disabled: \(recordingState == .starting || recordingState == .stopping)")
+
+                // Transition state IMMEDIATELY for instant UI feedback (button disable + loading indicator)
+                switch recordingState {
+                case .idle, .error:
+                    startingTimestamp = tapTime
+                    print("⏱️ [TIMING] User tap captured at \(formatTimestamp(tapTime))")
+                    transitionTo(.starting)  // State changes immediately
+
+                    // Defer async work to next run loop iteration to allow UI to update first
+                    Task { @MainActor in
+                        startRecording()
+                    }
+                case .recording, .detectingTurn, .cooldown:
+                    stopRecording()
+                case .starting, .stopping:
+                    // Already transitioning, ignore
+                    print("🔘 [TAP] Ignoring - already in transitioning state")
+                }
+
+                print("👆 [TAP] Button action completed")
             } label: {
                 if recordingState == .starting || recordingState == .stopping {
                     HStack {
@@ -527,7 +575,7 @@ struct TurnDetectionView: View {
     // MARK: - Actions
 
     private func handleRecordingToggle() {
-        print("🔘 [TOGGLE] Button pressed, current state: \(recordingState.description)")
+        print("🔘 [TOGGLE] Button tapped at \(formatTimestamp()), current state: \(recordingState.description)")
 
         switch recordingState {
         case .idle, .error:
@@ -546,8 +594,8 @@ struct TurnDetectionView: View {
     private func startRecording() {
         // Guard against multiple simultaneous starts (race condition before button disables)
         switch recordingState {
-        case .idle, .error:
-            break  // OK to start
+        case .idle, .error, .starting:
+            break  // OK to start (.starting allowed since Button tap transitions to it first)
         default:
             print("⚠️ [START] Ignoring duplicate start request, current state: \(recordingState.description)")
             addLog("⚠️ Already starting/recording, ignoring", level: .warning)
@@ -556,8 +604,10 @@ struct TurnDetectionView: View {
 
         print("🎬 [START] Beginning start sequence from state: \(recordingState.description)")
 
-        // Transition to starting state
-        transitionTo(.starting)
+        // Transition to starting state (only if not already in .starting from Button tap)
+        if recordingState != .starting {
+            transitionTo(.starting)
+        }
 
         Task {
             print("🔄 [START] Task started, requesting speech recognition...")
@@ -649,6 +699,9 @@ struct TurnDetectionView: View {
         // Clear accumulated transcription
         accumulatedTranscription = ""
         lastSegmentText = ""
+
+        // Reset loading indicator flag
+        isWaitingForFirstTranscription = false
 
         addLog("⏹️ Recording stopped", level: .info)
 
