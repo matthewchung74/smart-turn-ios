@@ -334,7 +334,17 @@ final class AudioCaptureEngine: ObservableObject {
     private func startEngine() throws {
         do {
             try audioEngine.start()
+
+            // CRITICAL: Verify engine actually started
+            // Sometimes start() succeeds but engine is not running (AVAudioEngine bug)
+            if !audioEngine.isRunning {
+                print("❌ CRITICAL: audioEngine.start() succeeded but isRunning = false!")
+                print("   This is an AVAudioEngine bug - engine in invalid state")
+                throw AudioCaptureError.audioEngineStartFailed
+            }
+            print("✅ Audio engine verified running (isRunning = true)")
         } catch {
+            print("❌ Audio engine start failed: \(error)")
             throw AudioCaptureError.audioEngineStartFailed
         }
     }
