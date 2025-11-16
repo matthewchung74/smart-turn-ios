@@ -66,7 +66,10 @@ final class AudioCaptureEngine: ObservableObject {
     @Published private(set) var audioLevel: Float = 0.0
     @Published private(set) var bufferDuration: Double = 0.0
 
-    private let audioEngine = AVAudioEngine()
+    // CRITICAL: Must be var, not let - we recreate the engine on each start
+    // AVAudioEngine has a bug where reusing the same instance after stop/start
+    // causes tap callbacks to never fire (engine reports running but tap is dead)
+    private var audioEngine: AVAudioEngine!
     private var audioBuffer: [Float] = []
     private let bufferLock = NSLock()
 
@@ -132,6 +135,18 @@ final class AudioCaptureEngine: ObservableObject {
 
         print("🎙️ Starting audio capture...")
 
+        // CRITICAL FIX: Recreate AVAudioEngine on each start
+        // AVAudioEngine has a bug where reusing the same instance causes tap callbacks
+        // to never fire after the first stop/start cycle. Symptoms:
+        // - audioEngine.start() succeeds
+        // - audioEngine.isRunning returns true
+        // - Tap installation succeeds
+        // - BUT: Tap callback never fires (no audio data)
+        // - Engine silently stops itself mid-session
+        // Solution: Always create a fresh engine instance
+        audioEngine = AVAudioEngine()
+        print("🔧 Created fresh AVAudioEngine instance")
+
         // Reset empty buffer logging flag for new session
         hasLoggedEmptyBuffers = false
 
@@ -185,9 +200,9 @@ final class AudioCaptureEngine: ObservableObject {
         print("✅ Audio tap removed")
 
         // NOTE: We do NOT call audioEngine.reset() here because:
-        // - audioEngine.stop() already deallocates the engine
-        // - reset() can leave the engine in an invalid state where tap callbacks don't fire
-        // - On next start, we get a fresh engine automatically
+        // - reset() leaves the engine in an invalid/corrupted state
+        // - On next start, we recreate the entire AVAudioEngine instance fresh
+        // - This is the only reliable way to avoid AVAudioEngine tap callback bugs
 
         isRecording = false
 
@@ -209,6 +224,10 @@ final class AudioCaptureEngine: ObservableObject {
         } catch {
             print("⚠️ Failed to deactivate audio session: \(error)")
         }
+
+        // Deallocate engine - will be recreated on next start
+        audioEngine = nil
+        print("✅ Audio engine deallocated")
 
         print("✅ Audio capture stopped")
     }
