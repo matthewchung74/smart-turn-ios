@@ -111,8 +111,9 @@ struct TurnDetectionView: View {
     @StateObject private var audioEngine = AudioCaptureEngine()
     @StateObject private var detector: SmartTurnDetector
 
-    // State machine
+    // State machine with version tracking for race condition prevention
     @State private var recordingState: RecordingState = .idle
+    @State private var stateVersion: Int = 0  // Incremented on each state change
 
     // State transition method (validates before mutation)
     private func transitionTo(_ newState: RecordingState) {
@@ -123,7 +124,8 @@ struct TurnDetectionView: View {
 
         let oldState = recordingState
         recordingState = newState
-        print("🔄 State transition: \(oldState.description) → \(newState.description)")
+        stateVersion += 1  // Increment version to invalidate old async callbacks
+        print("🔄 State transition: \(oldState.description) → \(newState.description) (v\(stateVersion))")
         addLog("State: \(newState.description)", level: .info)
     }
 
@@ -641,7 +643,15 @@ struct TurnDetectionView: View {
             print("✅ TRIGGERING TURN DETECTION")
             transitionTo(.detectingTurn)
 
+            // Capture current state version to detect stale callbacks
+            let capturedVersion = stateVersion
+
             detector.detectTurnAndUpdate { result in
+                // Check if state changed while detection was running
+                guard self.stateVersion == capturedVersion else {
+                    print("⚠️ Stale turn detection callback (v\(capturedVersion) != v\(self.stateVersion)), ignoring result")
+                    return
+                }
                 self.handleTurnDetectionResult(result)
             }
         }
@@ -688,9 +698,19 @@ struct TurnDetectionView: View {
 
         detector.speechRecognitionManager.stopRecognition()
 
+        // Capture state version to detect if user stops recording during restart delay
+        let capturedVersion = stateVersion
+
         // Wait for audio engine to fully stop before restarting
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000) // 500ms delay
+
+            // Check if state changed during delay (e.g., user stopped recording)
+            guard self.stateVersion == capturedVersion else {
+                print("⚠️ State changed during recognition restart delay, skipping restart")
+                return
+            }
+
             do {
                 try self.detector.speechRecognitionManager.startRecognition()
                 print("✅ Speech recognition restarted successfully")
@@ -703,8 +723,18 @@ struct TurnDetectionView: View {
     /// Setup auto-clear timer to clear result after 3 seconds
     private func setupAutoClearTimer() {
         resultDisplayTimer?.invalidate()
+
+        // Capture state version to detect if user stops recording before timer fires
+        let capturedVersion = stateVersion
+
         resultDisplayTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
             Task { @MainActor in
+                // Check if state changed (e.g., user stopped recording)
+                guard self.stateVersion == capturedVersion else {
+                    print("⚠️ State changed before auto-clear timer fired, skipping clear")
+                    return
+                }
+
                 self.detector.clearResult()
                 print("🔄 Auto-cleared result")
                 self.addLog("🔄 Result cleared", level: .info)
