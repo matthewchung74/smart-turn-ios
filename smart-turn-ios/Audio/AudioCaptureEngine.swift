@@ -122,8 +122,17 @@ final class AudioCaptureEngine: ObservableObject {
 
     /// Start audio capture
     func startCapture() throws {
+        // Check if already recording
+        if isRecording {
+            print("⚠️ Already recording, ignoring startCapture()")
+            return
+        }
+
+        print("🎙️ Starting audio capture...")
+
         // Check permission
         guard microphonePermissionStatus else {
+            print("❌ Microphone permission not granted")
             throw AudioCaptureError.microphoneNotAuthorized
         }
 
@@ -135,34 +144,62 @@ final class AudioCaptureEngine: ObservableObject {
         #endif
 
         // Configure audio session
+        print("🔧 Configuring audio session...")
         try configureAudioSession()
 
         // Setup audio tap
+        print("🔧 Setting up audio tap...")
         try setupAudioTap()
 
         // Start engine
+        print("🔧 Starting audio engine...")
         try startEngine()
 
         isRecording = true
+        print("✅ Audio capture started")
     }
 
     /// Stop audio capture
     func stopCapture() {
-        audioEngine.stop()
-        inputNode.removeTap(onBus: 0)
+        guard isRecording else {
+            print("⚠️ Already stopped, ignoring stopCapture()")
+            return
+        }
+
+        print("⏹️ Stopping audio capture...")
+
+        // Stop engine first
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
+
+        // Remove tap if it exists
+        if inputNode.numberOfInputs > 0 {
+            inputNode.removeTap(onBus: 0)
+        }
+
         isRecording = false
 
         // Clear buffer
         bufferLock.lock()
         audioBuffer.removeAll()
+        bufferDuration = 0.0
         bufferLock.unlock()
+
+        // Clear consumers (they should have unregistered, but clean up stale refs)
+        consumersLock.lock()
+        consumers.removeAll { $0.value == nil }
+        consumersLock.unlock()
 
         // Deactivate audio session
         do {
             try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            print("✅ Audio session deactivated")
         } catch {
             print("⚠️ Failed to deactivate audio session: \(error)")
         }
+
+        print("✅ Audio capture stopped")
     }
 
     /// Get current audio buffer (last 8 seconds)
